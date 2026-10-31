@@ -6,9 +6,9 @@
 > |---|---|---|
 > | 控制面 | `Agent-Ops-WeCom-Bridge` | 已公开（**曾用名 `Agent-Ops-Console`**） |
 > | **数据面** | **`Agent-Ops-Edge-Hub`** | 👈 本仓 |
-> | 总蓝图 | `Agent-Ops-Architecture` | 只放文档，暂未公开 |
+> | 总蓝图 | `Agent-Ops-Architecture` | 已公开（只有文档） |
 >
-> 仓库：`https://github.com/Ly-FirmwareLab/Agent-Ops-Edge-Hub`
+> 仓库：`https://github.com/Ly-Systems-Lab/Agent-Ops-Edge-Hub`
 >
 > ⚠️ **本文件只做索引 + 记本仓特有的红线/坑**，不写项目细节。
 > 那些「怎么量、怎么证、怎么别自己骗自己」的通用判据，属于另一个项目的工作区
@@ -27,7 +27,10 @@
 
 | 要找什么 | 去哪 |
 |---|---|
-| 对外介绍 / 快速上手 / 架构边界 | [`README.md`](./README.md) |
+| 对外门面 / 三件套位置 / 快速上手 | [`README.md`](./README.md) |
+| 物理世界数据面规约（可靠 / 安全 / 隔离） | [`docs/DATA-PLANE-CHARTER.md`](./docs/DATA-PLANE-CHARTER.md) |
+| 逻辑闭环、可靠性机制、架构边界 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) |
+| 安全边界、ACL 全文、HTTP 加固路线 | [`docs/SECURITY.md`](./docs/SECURITY.md) |
 | 部署实况：单元、端口、配置键、设备清单 | [`deploy/DEPLOY.md`](./deploy/DEPLOY.md)（最厚的一本账） |
 | P4 接入契约（主题/报文/超时/反控） | [`docs/P4-PI-AGENT-SPEC.md`](./docs/P4-PI-AGENT-SPEC.md) |
 | P4 侧交接与自验清单 | [`docs/P4-PI-HANDOFF.md`](./docs/P4-PI-HANDOFF.md) |
@@ -59,7 +62,7 @@
      ⚠️ **提交的作者身份也算**：`git config user.email` 会随每次提交一起公开，
      `.gitignore` 管不到它。**本仓已设成 noreply 邮箱**，别再改回私人邮箱。
 4. **内部规划与交接文档不进公开仓**（导出时排除）。公开镜像里不该出现死链。
-5. **`config/aclfile.example` 与 `README.md` 里的 ACL 片段必须同源** ——
+5. **`config/aclfile.example` 与 `docs/SECURITY.md` 里的 ACL 片段必须同源** ——
    一处改了，另一处**同一个提交里**改完。它们已经开始漂移过一次（见坑 1）。
 6. **重要决策事前提问**（架构 / 选型 / 取舍 / 方案分叉）。用户明确说过不会嫌麻烦。
 

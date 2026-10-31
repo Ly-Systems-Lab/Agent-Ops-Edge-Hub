@@ -36,7 +36,7 @@ ESP32-P4 ──mTLS──▶ MQTT hub/chat/p4
 > **但这不是缺陷，是设计选择。** 本项目是「定制端侧接入 + Agent 互联」的结合体，
 > **只有「企微机器人分层管理」那一层是通用的**。
 > 刻意不做多设备路由的理由，以及「怎么接你自己的设备」，见
-> [`README.md` §架构边界](../README.md#架构边界这不是通用mqtt底座)。
+> [`docs/ARCHITECTURE.md` §架构边界](../docs/ARCHITECTURE.md#四架构边界这不是通用-mqtt-底座)。
 
 ---
 
