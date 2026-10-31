@@ -1,0 +1,91 @@
+# ============================================================
+# Pi Hub MQTT ACL —— 依据 P4-PI-AGENT-SPEC.md §2
+# 原则：按主题收窄，绝不给 "#"
+#
+# 安装位置：/etc/mosquitto/aclfile
+# 配套：/etc/mosquitto/passwd（用 mosquitto_passwd 生成）
+#
+# 用户名为「角色名」，请按你的实际部署改名（保持一致即可）。
+# 生成密码文件示例：
+#   sudo mosquitto_passwd -c /etc/mosquitto/passwd pihub
+#   sudo mosquitto_passwd    /etc/mosquitto/passwd p4
+#   sudo mosquitto_passwd    /etc/mosquitto/passwd agent
+#   sudo mosquitto_passwd    /etc/mosquitto/passwd observer
+#   sudo mosquitto_passwd    /etc/mosquitto/passwd car
+# ============================================================
+
+# ---- 旧服务账号（本机回环，6 个 systemd 组件共用）----
+# api / devctl / monitor / wecom-bot / p4-bot / car-bot 都用它。
+# ⚠️ 这是「本机全权限」账号：它能 readwrite hub/command/#，所以各 bot 之间
+#    在总线层是**互不可见但都能发**——边界靠各自的进程和主题约定，不靠 ACL。
+user pihub
+topic readwrite hub/alert/#
+topic readwrite hub/command/#
+topic readwrite hub/chat/#
+
+# ---- P4 控制面板（设备侧，TLS 接入）----
+# 只能发自己的聊天消息 + 自己的状态；只能读发给自己的回复
+# ★ 反控（2026-10-28，C15 步 1）需要最后两行：收 hub/command/p4、回 .../ack。
+#   ⚠️ 少这两行，P4 会「反复重连、没有明确报错」——
+#   MQTT 3.1.1 下订阅一个被 ACL 拒的主题，broker 会拒绝该订阅（mosquitto 默认还会直接断连）。
+user p4
+topic write hub/chat/p4
+topic write hub/device/p4/status
+topic read  hub/chat/p4/reply
+topic read  hub/command/p4
+topic write hub/command/p4/ack
+
+# ---- Agent 适配器（树莓派侧大脑 / 外部 Claude Code）----
+# 与 p4 恰好相反：读 p4 说的话，写回复给 p4
+# ★ 反控方向同理反着来：能发命令给 P4、能读 P4 的回执。
+#   注意 `p4_bot.py` 不需要这个账号 —— 它在 Pi 本机跑，用 `pihub`（readwrite hub/command/#）。
+#   `agent` 是给【跨机器的外部 Agent】用的：工作区在别的设备上，只能经 8883 接入。
+user agent
+topic read  hub/chat/p4
+topic write hub/chat/p4/reply
+topic read  hub/device/p4/status
+topic write hub/command/p4
+topic read  hub/command/p4/ack
+
+# ---- 曼波小车（2026-10-30 新增，第三个接入设备）----
+# 小车侧（语音核心控制.py）收指令、回回执。
+#
+# ★ 两条接法，按你的部署选：
+#   A. 小车控制跑在 Pi 本机（推荐，默认）→ 走 1883 回环，用 pihub 账号即可，
+#      本段 ACL 不会生效。原因：127.0.0.1 不出网卡，局域网无法连接，
+#      再去加 TLS 只是安全剧场（攻击者能到本机就能直接开串口）。
+#   B. 小车控制跑在【另一台机器】→ 必须走 8883（TLS + 双向证书），
+#      并给 car 账号建密码：sudo mosquitto_passwd /etc/mosquitto/passwd car
+#      ⚠️ 跨机器还走 1883 明文，等于把小车的控制权交给整个网段。
+#
+# 不管选哪条，本段都建议留着 —— 它把「小车只能碰自己的主题」这条边界写死了。
+user car
+topic read  hub/command/car
+topic write hub/command/car/ack
+
+# ---- 调试观察者（只读全局，自验用）----
+# ⚠️ 仅用于本机排障，不要给任何外部设备分配此账号
+user observer
+topic read hub/#
+
+# ============================================================
+# 接入新设备时怎么加：
+#   1) mosquitto_passwd 加一个新账号
+#   2) 在这里加一段 user <名>，只给它【必需的最窄主题】
+#   3) sudo systemctl reload mosquitto
+#
+# 主题约定（按需扩展）：
+#   hub/alert/<类型>          告警（monitor.py 产出 → wecom_bot.py 消费）
+#   hub/command/<设备>        指令下发
+#                             ⚠️ 每台设备只订自己的那一个，**绝不订 hub/command/#**：
+#                               devctl.py     → hub/command/smalltv
+#                               p4_bot.py     → 发往 hub/command/p4（P4 侧消费）
+#                               car_bot.py    → 发往 hub/command/car（小车侧消费）
+#   hub/chat/p4               P4 → Agent 的上行消息
+#   hub/chat/p4/reply         Agent → P4 的下行回复
+#   hub/device/p4/status      P4 状态上报
+#   hub/command/p4            P4 反控命令（music / aichat / close_all）
+#   hub/command/p4/ack        P4 命令回执
+#   hub/command/car           小车指令（语音核心控制.py 消费）
+#   hub/command/car/ack       小车回执
+# ============================================================

@@ -1,0 +1,20 @@
+[Unit]
+Description=Pi Hub P4 设备机器人 (企微固定指令 → MQTT hub/command/p4)
+After=network-online.target mosquitto.service
+Wants=network-online.target mosquitto.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/cooperate/pihub/app
+Environment=PYTHONUNBUFFERED=1
+Environment=PIHUB_DB=/home/pi/cooperate/pihub/data/pihub.db
+ExecStart=/home/pi/cooperate/pihub/.venv/bin/python /home/pi/cooperate/pihub/app/p4_bot.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/pi/cooperate/pihub/logs/p4_bot.log
+StandardError=append:/home/pi/cooperate/pihub/logs/p4_bot.log
+
+[Install]
+WantedBy=multi-user.target

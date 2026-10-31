@@ -1,0 +1,28 @@
+[Unit]
+Description=P4 Control Panel Agent Adapter (MQTT <-> OpenClaw)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+# ⚠️ 本文件有 4 处硬编码路径（WorkingDirectory / EnvironmentFile / ExecStart /
+#    Standard* 两条），默认按 /home/pi/cooperate/p4-agent，与 pihub 那套 unit
+#    同一约定。部署到别处要**一起改**，漏一处就起不来。
+WorkingDirectory=/home/pi/cooperate/p4-agent
+EnvironmentFile=/home/pi/cooperate/p4-agent/.env
+Environment=PYTHONUNBUFFERED=1
+# 用适配器自己的 venv（README 部署第 1 步建的那个），依赖版本可复现。
+# 若你坚持用系统 python3，改成 /usr/bin/python3，并先执行
+#   sudo -H python3 -m pip install 'paho-mqtt==2.1.0'
+ExecStart=/home/pi/cooperate/p4-agent/.venv/bin/python /home/pi/cooperate/p4-agent/app/p4_agent.py
+Restart=always
+RestartSec=5
+# ★ logs/ 目录必须**先存在**：systemd 不会替你建目录，打不开 append 目标时
+#   服务直接启动失败（只报一句 status=…，很容易被当成"程序崩了"）。
+StandardOutput=append:/home/pi/cooperate/p4-agent/logs/agent.log
+StandardError=append:/home/pi/cooperate/p4-agent/logs/agent.log
+
+[Install]
+WantedBy=multi-user.target

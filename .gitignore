@@ -1,0 +1,62 @@
+# ============================================================
+# Agent-Ops-Edge-Hub · Pi Hub 底座
+# 目的：只让「可复现的代码 + 脱敏的部署说明」进仓；
+#       秘密 / 运行时数据 / 缓存 / 备份 一律不进。
+#
+# 🔴 必须在【第一次 git add 之前】放到仓库根目录。
+# 🔴 如果已经误提交：改历史不够，先轮换凭证（企微 token / TLS 私钥 / PAT）。
+# ============================================================
+
+# ---- 秘密：一个都不能进 ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.csr
+password_file
+acl_file
+mosquitto.db
+
+# ---- 运行时数据（DB 里有 chat id / 自选股 / 告警历史）----
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+*.log
+backup/
+*.sqlite
+*.sqlite3
+*.db
+
+# ---- Python ----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- 构建 / 依赖缓存 ----
+.pio/
+node_modules/
+dist/
+build/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 按需排除：先在 `git status` 里确认再启用 ----
+# assets/
+# firmware/
+# acceptance_s9.sh
+# ---- 调试遗留备份（含硬编码内网 IP，不进仓）----
+*.bak.*
+*.bak
+*~
