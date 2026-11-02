@@ -23,6 +23,14 @@
 
 ---
 
+## 🎬 演示
+
+**[▶ 一句话驱动三台端侧设备（36 秒）](https://www.bilibili.com/video/BV18Zx86KEDT/)**
+
+C3 小电视 → P4 触控面板 → 具身智能小车：一条自然语言指令，由 Agent 依次执行。
+
+---
+
 ## 物理世界数据面规约
 
 > 总蓝图仓那份[《协同宣言》](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture/blob/main/docs/manifesto.md)
