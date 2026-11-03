@@ -112,6 +112,11 @@ sequenceDiagram
 **三条流，各自独立**：告警（上游 → 推送）、指令（入口 → 设备）、回执（设备 → 入口）。
 通过 MQTT 解耦，任一端重连不影响其它。
 
+**反控是同一条闭环的另一半，而且不只属于 Pi 侧。** 任何持有独立凭据的接入方 ——
+另一台电脑上的 Agent、你自己的服务 —— 都能按 broker 授权的范围指挥端侧设备。
+**能力边界由 ACL 决定，不由接入方的自觉决定**：一套独立证书、一个独立角色、
+一段按主题收窄的授权，缺一样都做不了。见 **[win-agent/](win-agent/)**。
+
 > 逐环详解、可靠性机制清单与架构边界：**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**。
 
 ---
@@ -187,6 +192,7 @@ sudo systemctl enable --now pihub-api pihub-devctl pihub-monitor pihub-wecom-bot
 | [`config/`](config/) | Mosquitto 配置与 ACL 样例（**脱敏，无真实凭据**） |
 | [`systemd/`](systemd/) | 6 个 systemd 单元（`p4-agent` 的单元在它自己的目录里） |
 | [`p4-agent/`](p4-agent/) | ESP32-P4 ↔ OpenClaw Agent 桥接适配器（独立服务，最小完整样本） |
+| [`win-agent/`](win-agent/) | **指令源侧**客户端：任何持独立凭据的接入方都能安全反控端侧设备（与 `p4-agent/` 对称） |
 | [`ai-agent-wecom/`](ai-agent-wecom/) | 把 AI Agent 接入企业微信的教程（可复现，含实拍） |
 | [`docs/`](docs/) | 接入契约、交接文档、架构 / 安全 / 规约 |
 | [`deploy/DEPLOY.md`](deploy/DEPLOY.md) | 部署实况台账：单元、端口、配置键、设备清单 |

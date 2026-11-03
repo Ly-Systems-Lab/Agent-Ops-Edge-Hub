@@ -35,6 +35,7 @@
 | P4 接入契约（主题/报文/超时/反控） | [`docs/P4-PI-AGENT-SPEC.md`](./docs/P4-PI-AGENT-SPEC.md) |
 | P4 侧交接与自验清单 | [`docs/P4-PI-HANDOFF.md`](./docs/P4-PI-HANDOFF.md) |
 | P4 ↔ OpenClaw 桥接适配器本身 | [`p4-agent/README.md`](./p4-agent/README.md) |
+| 指令源侧客户端（Windows Agent 反控设备） | [`win-agent/README.md`](./win-agent/README.md) |
 | 企微接入教程（纯教程，非全量代码） | [`ai-agent-wecom/README.md`](./ai-agent-wecom/README.md) |
 | 控制面（企微 ⇄ Claude Code） | 另一个仓：`Agent-Ops-WeCom-Bridge` |
 

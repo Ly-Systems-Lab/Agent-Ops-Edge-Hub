@@ -98,6 +98,18 @@ P4 不仅能发消息，也能被 MQTT 反控（`music` / `aichat` / `close_all`
 命令走 `hub/command/p4`，回执走 `hub/command/p4/ack`，与上行对话共用同一套 ACL 与凭据。
 契约见 [P4-PI-AGENT-SPEC.md §11](P4-PI-AGENT-SPEC.md#11-反控命令c15-步-12026-10-28-起可用)。
 
+**反控的主体不止 Pi 侧。** 任何持有独立凭据的接入方 —— 另一台电脑上的 Agent、
+你自己的服务 —— 只要 broker 给它一段授权，就能指挥对应的端侧设备。
+这不是"多开一个口子"，而是同一套模型的延伸：
+
+| 谁 | 凭什么能控 | 边界在哪 |
+|---|---|---|
+| Pi 侧机器人 | 本机回环账号 | 进程边界 |
+| 外部接入方 | 独立证书 + 独立 ACL 角色 | **broker 的授权表** |
+
+⇒ **能力边界由 ACL 决定，不由接入方的自觉决定**；想收回，改一行 ACL，
+不必去设备上动任何东西。参考实现：[`win-agent/`](../win-agent/)。
+
 ---
 
 ## 三、可靠性机制清单
@@ -210,4 +222,5 @@ P4 不仅能发消息，也能被 MQTT 反控（`music` / `aichat` / `close_all`
 | 从零部署、端口、配置键、设备清单 | [DEPLOY.md](../deploy/DEPLOY.md) |
 | P4 的主题 / 报文 / 超时契约 | [P4-PI-AGENT-SPEC.md](P4-PI-AGENT-SPEC.md) |
 | P4 侧已实现到什么程度 | [P4-PI-HANDOFF.md](P4-PI-HANDOFF.md) |
+| 外部接入方怎么安全反控设备 | [`win-agent/`](../win-agent/) |
 | 三件套的顶层设计与协同约定 | [Agent-Ops-Architecture](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) |
