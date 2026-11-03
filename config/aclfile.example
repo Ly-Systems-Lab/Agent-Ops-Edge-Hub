@@ -1,6 +1,10 @@
 # ============================================================
 # Pi Hub MQTT ACL —— 依据 P4-PI-AGENT-SPEC.md §2
-# 原则：按主题收窄，绝不给 "#"
+# 原则：按主题收窄，绝不给无限制通配（"#" 仅限 observer 调试账号）
+#
+# ⚠️ **判断权限别信 SUBACK / PUBACK**：被 ACL 拒绝时 broker 仍回
+#    SUBACK granted、PUBACK RC 0，只在投递时静默丢弃。
+#    ⇒ 唯一可靠的判据是「实际收到了哪些主题」。
 #
 # 安装位置：/etc/mosquitto/aclfile
 # 配套：/etc/mosquitto/passwd（用 mosquitto_passwd 生成）
@@ -46,6 +50,19 @@ topic write hub/chat/p4/reply
 topic read  hub/device/p4/status
 topic write hub/command/p4
 topic read  hub/command/p4/ack
+
+# ---- 外部 Agent（个人电脑；TLS 接入）----
+# ★ 与上面的 `agent` 是同一类角色的两个实例，区别只在**授权范围**：
+#     `agent` 能进 P4 的对话通道（chat / reply / status）；
+#     `win`   只能发命令、读回执 —— 更窄。
+#   故意不给：`hub/chat/*`（看不到 P4 在说什么）、`hub/device/*`（看不到设备状态）、
+#             `hub/alert/*`（看不到告警）、任何通配。
+#   参考实现：win-agent/（Windows 侧 Agent 客户端）。
+user win
+topic write hub/command/p4
+topic read  hub/command/p4/ack
+topic write hub/command/car
+topic read  hub/command/car/ack
 
 # ---- 曼波小车（2026-10-30 新增，第三个接入设备）----
 # 小车侧（语音核心控制.py）收指令、回回执。

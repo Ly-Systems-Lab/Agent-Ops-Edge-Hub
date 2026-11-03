@@ -53,15 +53,22 @@ user p4                                  # 设备侧
     topic write hub/command/p4/ack       #   只能回自己的回执
 ```
 
-**五个角色**（全文见 [`config/aclfile.example`](../config/aclfile.example)）：
+**六个角色**（全文见 [`config/aclfile.example`](../config/aclfile.example)）：
 
 | 角色 | 权限 | 用途 |
 |---|---|---|
 | `pihub` | `readwrite hub/alert/#`、`hub/command/#`、`hub/chat/#` | 本机 6 个服务共用，**仅回环** |
 | `p4` | 读写自己的 chat / status / command / ack | P4 面板（设备侧） |
 | `agent` | 与 `p4` 恰好相反：读 P4 的话、写回复、发命令、读回执 | 跨机器的外部 Agent |
+| `win` | 只写 `hub/command/{p4,car}`、只读两者的 `ack` | 外部接入方，**授权最窄**（见下） |
 | `car` | `read hub/command/car`、`write hub/command/car/ack` | 小车 |
 | `observer` | `read hub/#` | **仅本机排障，不要给外部设备** |
+
+> ★ **`agent` 与 `win` 是同一类角色的两个实例**，差别只在授权范围：
+> `agent` 能进 P4 的对话通道（chat / reply / status），`win` 只能发命令、读回执。
+> `win` **故意**不给 `hub/chat/*`、`hub/device/*`、`hub/alert/*` 与任何通配 ——
+> 它的定位是"只控设备、看不到别的"。参考实现：[`win-agent/`](../win-agent/)。
+> 给新接入方开权限时，**照 `win` 的形状开，别照 `agent` 开**。
 
 每台设备**看不到别人的任何主题**。一台设备凭据泄露，影响面锁死在它自己的主题空间内
 ——**爆炸半径物理隔离**，这也是为什么本项目坚持「每设备独立进程 + 独立证书 + 独立 ACL 角色」。
