@@ -16,7 +16,7 @@
 |---|---|---|---|
 | **本仓** · [`Agent-Ops-Edge-Hub`](https://github.com/Ly-Systems-Lab/Agent-Ops-Edge-Hub) | **数据面** · Agent ⇄ 物理世界 | 基于 MQTT 的边缘通信底座：把 Agent 的意图转成设备的真实动作 | 已公开 |
 | [`Agent-Ops-WeCom-Bridge`](https://github.com/Ly-Systems-Lab/Agent-Ops-WeCom-Bridge) | **控制面** · 人 ⇄ Agent | 把企业微信变成 Agent 的调度台：流式交互、进度管控、权限拦截 | 已公开 |
-| [`Agent-Ops-Architecture`](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) | **总蓝图** | 分布式具身智能的顶层设计、《协同宣言》与人机协同约定 | 已公开 |
+| [`Agent-Ops-Architecture`](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) | **总蓝图** | 分布式 Agent 编排规范：跨越数字与物理边界；《协同宣言》与人机协同约定 | 已公开 |
 
 **控制面与数据面彻底解耦** —— 两个仓之间不互相调用，只共享同一套约定
 （同一个 Agent 概念、同一个路由原则、同一条留痕要求）。
