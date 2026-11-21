@@ -141,7 +141,7 @@ def describe_ack(payload):
       {"v":1,"id":"cmd-1","cmd":"music","ok":true}
       {"v":1,"id":"cmd-2","cmd":"aichat","ok":false,"error":"not_installed"}
 
-    error 取值见 docs/P4-PI-AGENT-SPEC.md §11.2。
+    error 取值见 P4 仓 docs/mqtt-contract.md §11。
     """
     cmd = payload.get("cmd", "")
     ok = payload.get("ok")

@@ -4,6 +4,8 @@
 > 填写人：树莓派侧 Agent · 填写日期：`2026-10-26`
 > 🔴 本文只含事实与结构；**不含任何真实 token / 私钥 / chat id / 用户 id / 设备 MAC / 内网 IP**。
 >    值一律用 `<REDACTED>` 或 `<EXAMPLE>`。
+>
+> ✅ **2026-11-22 已切换到 `core/` + `devices/` 布局**，旧 `app/` 已退役。
 
 ---
 
@@ -71,8 +73,13 @@ Werkzeug==3.1.8
 
 ```text
 /home/pi/cooperate/pihub/
-├── app/                 # 14 个 .py + schema.sql（仓内）
-├── systemd/             # 6 个 unit（仓内）
+├── core/                # 与设备无关：行情 / 天气 / 企微基类 / MQTT 守卫 / DB（仓内）
+├── devices/
+│   ├── smalltv/         # 小电视插件：http_api / devctl / bot / command + systemd/（仓内）
+│   ├── p4/              # P4 面板插件：bot / bridge / command + systemd/ + .env.example（仓内）
+│   ├── car/             # 曼波小车插件：bot / command + systemd/（仓内）
+│   └── _template/       # 新设备空壳：复制这个目录开工（仓内）
+├── systemd/             # 只剩 pihub-monitor.service（其余单元跟着各自的设备目录走）
 ├── config/              # Mosquitto 配置 + ACL 样例（仓内，脱敏）
 ├── deploy/              # 本文件（仓内）
 ├── acceptance_s9.sh     # 验收脚本（仓内）
@@ -83,7 +90,7 @@ Werkzeug==3.1.8
 └── .venv/               # 🔴 虚拟环境（仓外）
 ```
 
-**仓内**：`app/ systemd/ config/ deploy/ acceptance_s9.sh requirements.txt README.md LICENSE .env.example`
+**仓内**：`core/ devices/ systemd/ config/ deploy/ acceptance_s9.sh requirements.txt README.md LICENSE .env.example`
 **运行时生成（都不进仓）**：`data/ logs/ backup/ .venv/ __pycache__/`
 
 ⚠️ 部署目录本身**不是 git 仓**（代码在 git 里维护，部署目录是另外一份）。
@@ -93,7 +100,19 @@ Werkzeug==3.1.8
 
 ## 4. systemd 实际单元（7 个）
 
-`pihub/` 内 **6 个**单元结构一致，仅 `Description` / `ExecStart` / 日志文件不同。共同点：
+7 个单元的结构一致，仅 `Description` / `ExecStart` / 日志文件不同。**入口脚本跟着目录走**：
+
+| 单元 | 单元文件在仓内哪 | `ExecStart` 指向 | 日志 |
+|---|---|---|---|
+| `pihub-monitor` | `systemd/` | `core/monitor.py` | `logs/monitor.log` |
+| `pihub-api` | `devices/smalltv/systemd/` | `devices/smalltv/http_api.py` | `logs/api.log` |
+| `pihub-devctl` | `devices/smalltv/systemd/` | `devices/smalltv/devctl.py` | `logs/devctl.log` |
+| `pihub-wecom-bot` | `devices/smalltv/systemd/` | `devices/smalltv/bot.py` | `logs/wecom_bot.log` |
+| `pihub-p4-bot` | `devices/p4/systemd/` | `devices/p4/bot.py` | `logs/p4_bot.log` |
+| `pihub-p4-bridge` | `devices/p4/systemd/` | `devices/p4/bridge.py` | `devices/p4/logs/agent.log` |
+| `pihub-car-bot` | `devices/car/systemd/` | `devices/car/bot.py` | `logs/car_bot.log` |
+
+除 `pihub-p4-bridge` 外，共同点：
 
 - `User=pi` / `Group=pi`
 - `Environment=PYTHONUNBUFFERED=1`
@@ -102,35 +121,10 @@ Werkzeug==3.1.8
 - `StandardOutput`+`StandardError` → `append:<部署目录>/logs/<name>.log`
 
 ```ini
-# pihub-api.service
+# 以 pihub-api.service 为例（其余同构，只换 ExecStart 与日志名）
 After=network-online.target mosquitto.service
-ExecStart=<部署目录>/.venv/bin/python <部署目录>/app/api.py
+ExecStart=<部署目录>/.venv/bin/python <部署目录>/devices/smalltv/http_api.py
 日志=logs/api.log
-
-# pihub-devctl.service
-After=network-online.target mosquitto.service pihub-api.service
-ExecStart=<部署目录>/.venv/bin/python <部署目录>/app/devctl.py
-日志=logs/devctl.log
-
-# pihub-monitor.service
-After=network-online.target mosquitto.service
-ExecStart=<部署目录>/.venv/bin/python <部署目录>/app/monitor.py
-日志=logs/monitor.log
-
-# pihub-wecom-bot.service
-After=network-online.target mosquitto.service
-ExecStart=<部署目录>/.venv/bin/python <部署目录>/app/wecom_bot.py
-日志=logs/wecom_bot.log
-
-# pihub-p4-bot.service          （2026-10-28 接入）
-After=network-online.target mosquitto.service
-ExecStart=<部署目录>/.venv/bin/python <部署目录>/app/p4_bot.py
-日志=logs/p4_bot.log
-
-# pihub-car-bot.service         （2026-10-30 接入）
-After=network-online.target mosquitto.service
-ExecStart=<部署目录>/.venv/bin/python <部署目录>/app/car_bot.py
-日志=logs/car_bot.log
 ```
 
 > 单元里**没有** `Environment=` 携带任何密钥——所有凭据走 `.env` 文件。这是刻意设计，便于脱敏进仓。
@@ -139,33 +133,38 @@ ExecStart=<部署目录>/.venv/bin/python <部署目录>/app/car_bot.py
 
 | 服务 | 脚本 | `.env` 键 | MQTT 主题 |
 |---|---|---|---|
-| `pihub-wecom-bot` | `wecom_bot.py` | `WECOM_BOT_ID` / `_SECRET` | 发 `hub/command/smalltv`，收 `hub/alert/#` |
-| `pihub-p4-bot` | `p4_bot.py` | `P4_WECOM_BOT_ID` / `_SECRET` | 发 `hub/command/p4`，收 `hub/command/p4/ack` |
-| `pihub-car-bot` | `car_bot.py` | `CAR_WECOM_BOT_ID` / `_SECRET` | 发 `hub/command/car`，收 `hub/command/car/ack` |
+| `pihub-wecom-bot` | `devices/smalltv/bot.py` | `WECOM_BOT_ID` / `_SECRET` | 发 `hub/command/smalltv`，收 `hub/alert/#` |
+| `pihub-p4-bot` | `devices/p4/bot.py` | `P4_WECOM_BOT_ID` / `_SECRET` | 发 `hub/command/p4`，收 `hub/command/p4/ack` |
+| `pihub-car-bot` | `devices/car/bot.py` | `CAR_WECOM_BOT_ID` / `_SECRET` | 发 `hub/command/car`，收 `hub/command/car/ack` |
 
-> `p4_bot.py` / `car_bot.py` 都是 `class Xxx(WeComBot)` 继承 `wecom_bot.py`，**基类一行不改**——
+> `devices/p4/bot.py` / `devices/car/bot.py` 都是 `class Xxx(WeComBot)`，继承
+> [`core/wecom_base.py`](../core/wecom_base.py)，**基类一行不改**——
 > 只覆盖「凭据来源 + 指令解析 + 主题 + 回执配对」。这样心跳线程泄漏、退避不重置、
 > pending 无界增长那些修过的坑不会在第二份实现里重犯。
 
-### 另一个单元：`p4-agent`（独立目录）
+### 另一个单元：`pihub-p4-bridge`（2026-11-20 改名，原名 `p4-agent`）
 
-不在 `pihub/` 内，部署在 `/home/pi/cooperate/p4-agent`。它**用 `EnvironmentFile=` 读 `.env`**，
-这是与上面 6 个的区别（上面 6 个靠脚本自己解析 `.env`）。
+**代码在仓内 `devices/p4/`，实机部署在 `/home/pi/cooperate/pihub/devices/p4`。**
+它**用 `EnvironmentFile=` 读 `.env`**，这是与上面 6 个的区别（上面 6 个靠脚本自己解析 `.env`）。
 
 ```ini
-# p4-agent.service
-WorkingDirectory=/home/pi/cooperate/p4-agent
-EnvironmentFile=/home/pi/cooperate/p4-agent/.env
-ExecStart=/usr/bin/python3 /home/pi/cooperate/p4-agent/app/p4_agent.py
-日志=logs/agent.log
+# pihub-p4-bridge.service
+WorkingDirectory=/home/pi/cooperate/pihub/devices/p4
+EnvironmentFile=/home/pi/cooperate/pihub/devices/p4/.env
+ExecStart=/usr/bin/python3 /home/pi/cooperate/pihub/devices/p4/bridge.py
+StandardOutput=append:/home/pi/cooperate/pihub/devices/p4/logs/agent.log
 ```
+
+> 入口已由 `app/p4_agent.py` 改名为 `bridge.py`，服务名 `p4-agent` → `pihub-p4-bridge`（2026-11-20）。
+> 解释器保留系统 `/usr/bin/python3`：`devices/p4/` 下没有自己的 venv，
+> 而部署树根的 `.venv` 是给其余 6 个服务用的。
 
 **开机自启状态**（7 个全部 enabled）：
 
 ```bash
 systemctl is-enabled pihub-api pihub-devctl pihub-monitor pihub-wecom-bot
 systemctl is-enabled pihub-p4-bot pihub-car-bot
-systemctl is-enabled p4-agent
+systemctl is-enabled pihub-p4-bridge
 # enabled × 7
 ```
 
@@ -244,14 +243,14 @@ ss -lntp | grep -E '5000|1883|8883'
 > （没有 token、没有签名），暴露即等于把设备控制权交给能伪造源 IP 之外的一切人。
 
 ### 6.1 HTTP 白名单（2026-10-30 新增）
-`api.py` 加了全局 `before_request` 守卫：白名单外一律 **403**，函数体不执行。
+`devices/smalltv/http_api.py` 加了全局 `before_request` 守卫：白名单外一律 **403**，函数体不执行。
 白名单来自配置项 `http_allow`，默认 `127.0.0.1`；支持 CIDR；**含 `0.0.0.0/0` 直接拒绝启动**。
 
 ⚠️ **默认值会让 ESP32 取不到数**（403，而且返回体为空 ⇒ 屏幕上表现为"一直空白"，
 看不出是权限问题）。**部署时必须把设备 IP 加进去**：`http_allow=127.0.0.1,<设备IP>`。
 
 ### 6.2 被动学习 C3 的 IP
-同一版 `api.py` 还补上了原来缺的那半个闭环：C3 只要来取数（`/api/stock*`、`/api/weather`），
+同一版 `devices/smalltv/http_api.py` 还补上了原来缺的那半个闭环：C3 只要来取数（`/api/stock*`、`/api/weather`），
 Pi 就把它的真实源 IP 记进 `smalltv_ip`。四道边界：只认 **GET**、只认 **5000** 端口、
 拒绝回环、**只从白名单内学习**；同一 IP **30 s** 内只写一次库。
 
@@ -324,16 +323,16 @@ wecom_webhook_key           # 空（本部署走长连接模式，不用 webhook
 > | 来源 | 内容 |
 > |---|---|
 > | `/home/pi/cooperate/pihub/.env` | 3 个企微凭据 |
-> | `pihub/data/pihub.db` 的 `config` 表 | 23 个键（阈值、轮询间隔、`smalltv_ip` …）+ 本次新增的 4 个按机器人分的推送目标键（各 bot 首次收到消息时才落库） |
-> | `/home/pi/cooperate/p4-agent/.env` | 12 个 P4 键（`P4_MQTT_PASS` / `P4_GATEWAY_TOKEN` 必填） |
+> | `<部署目录>/data/pihub.db` 的 `config` 表 | 23 个键（阈值、轮询间隔、`smalltv_ip` …）+ 本次新增的 4 个按机器人分的推送目标键（各 bot 首次收到消息时才落库） |
+> | `/home/pi/cooperate/pihub/devices/p4/.env` | 12 个 P4 键（`P4_MQTT_PASS` / `P4_GATEWAY_TOKEN` 必填） |
 >
-> 换机器时：`pihub/.env` 要重建，`config` 表要在 `init_db.py` 之后**重新录入**
+> 换机器时：`<部署目录>/.env` 要重建，`config` 表要在 `core/init_db.py` 之后**重新录入**
 > （`smalltv_ip` 必填，否则"发指令"必然失败，表现为企微回 `执行失败（ESP32 返回 502）`），
-> `p4-agent/.env` 另建（样例见 `p4-agent/.env.example`）。
+> `devices/p4/.env` 另建（样例见 `devices/p4/.env.example`）。
 
-查看 pihub 当前生效值：`<venv>/bin/python app/config.py`
+查看 pihub 当前生效值：`<venv>/bin/python core/config.py`
 
-### 7.1 `p4-agent/.env` 键名（12 个，值全脱敏）
+### 7.1 `devices/p4/.env` 键名（12 个，值全脱敏）
 
 ```dotenv
 P4_DEVICE_ID=p4                  # 决定主题 hub/chat/<id>
@@ -351,13 +350,14 @@ P4_GATEWAY_TOKEN=***
 ```
 
 > `P4_CA_FILE` / `P4_AGENT_CERT` / `P4_AGENT_KEY` 在实机 `.env` 里显式写了绝对路径；
-> 仓内代码已改为**默认相对解析**到 `<repo>/p4-agent/certs/`，所以新部署可以不填这三项。
+> 仓内代码已改为**默认相对解析**到 `<repo>/devices/p4/certs/`，所以新部署可以不填这三项。
+> 2026-11-20 改名后实机 `.env` 里这三项已同步改为新绝对路径（`/home/pi/cooperate/pihub/devices/p4/certs/*`）。
 
 ---
 
 ## 8. DB schema（只有结构，没有数据）
 
-完整 schema 见仓内 [`app/schema.sql`](../app/schema.sql)。实际库中含 7 张表：
+完整 schema 见仓内 [`core/schema.sql`](../core/schema.sql)。实际库中含 7 张表：
 
 | 表 | 用途 | 是否含用户数据 |
 |---|---|---|
@@ -377,9 +377,9 @@ P4_GATEWAY_TOKEN=***
 
 | device id | 类型 | 传输 | 状态 | 代码位置 |
 |---|---|---|---|---|
-| `smalltv` | ESP32-C3 小电视 | HTTP（Pi → 设备 `/set`）+ `hub/command/smalltv` | ✅ **在线跑着** | `pihub/app/{devctl,command,api}.py` |
-| `p4` | ESP32-P4 控制面板 | MQTT 双向（8883 TLS）；反控走 `hub/command/p4` | ✅ **已打通，实测可对话 + 可反控** | `p4-agent/app/p4_agent.py` + `app/p4_bot.py` |
-| `car` | 曼波语音小车 | MQTT `hub/command/car` | ✅ **已接入（2026-10-30）** | `app/car_bot.py` |
+| `smalltv` | ESP32-C3 小电视 | HTTP（Pi → 设备 `/set`）+ `hub/command/smalltv` | ✅ **在线跑着** | `devices/smalltv/{http_api,devctl,bot,command}.py` |
+| `p4` | ESP32-P4 控制面板 | MQTT 双向（8883 TLS）；反控走 `hub/command/p4` | ✅ **已打通，实测可对话 + 可反控** | `devices/p4/bridge.py` + `devices/p4/bot.py` |
+| `car` | 曼波语音小车 | MQTT `hub/command/car` | ✅ **已接入（2026-10-30）** | `devices/car/bot.py` |
 | `cc` | Windows 侧 Claude Code | MQTT（8883 TLS，角色 `agent`） | 计划中 | — |
 
 **三台设备 = 三个企微机器人 = 三套独立凭据**，互不复用：
@@ -396,69 +396,72 @@ P4_GATEWAY_TOKEN=***
 
 > 设备 MAC / 局域网 IP 一律 `<REDACTED>`；只保留"有几台、什么类型、走什么协议"。
 
-### 9.1 ★ 架构定位：这是「两种架构的结合体」，不是通用 MQTT 底座
+### 9.1 ★ 架构定位：核心不认识任何设备，一切皆插件
 
-**结论先说**：本项目**不做**代码层的多设备路由，也不追求 MQTT 层的通用性。
-它的可复用价值在**分层管理架构**这一层，而不在「一套代码适配所有设备」。
+**结论先说**：架构主张只有一条 —— **一切皆插件**。核心不认识任何设备，
+每台设备一个自包含目录（主题 / 指令解析 / 回执渲染 / 凭据 / 单元）。
+**传输协议是选型**：按设备资源推荐 HTTP 或 MQTT，不强制。
+可复用价值在**分层管理架构 + 插件边界**这两层，不在「一套指令集适配所有设备」。
 
 #### 结合体的两半
 
 | 架构 | 具体是什么 | 通用性 |
 |---|---|---|
-| **A. 定制端侧接入** | 每台端侧设备（C3 小电视 / ESP32-P4 面板 / 将来的机械臂…）写**专属适配器**，主题与报文契约各自定制 | ❌ **刻意不通用**——按设备定制 |
+| **A. 端侧接入（插件）** | 每台设备一个自包含目录，填同一张六格表（主题 / 解析 / 渲染 / 凭据 / 目标 / 单元） | ✅ **边界通用**；指令与报文由插件自定 |
 | **B. Agent ↔ 设备互联** | Agent 经 MQTT / HTTP 与设备双向互通（P4 已跑通：MQTT → Gateway 流式 → 回推） | 结构可复用，接入需定制 |
 | **C. 企微机器人分层管理** | 企微作统一交互入口，可接任意 Agent / 端侧设备，各建机器人 | ⚠️ **交互级通用；指令集须按设备自定** |
 
-> 换句话说：**通用的是「怎么管」，不是「怎么接」**。
-> 由于 A 层的适配器长得都像「一个订主题、一个调 API 的小服务」，
-> 体感上确实像通用框架——但那是**形态相似**，不是抽象通用。
+> 换句话说：**通用的是「边界与生命周期」，定制的是「指令与报文」**。
+> 每个插件都填同一张六格表 —— 抽象的是**形状**，不是**语义**。
 
-#### 为什么刻意不做 MULTI-DEVICE 路由
+#### 为什么是插件，而不是一个大而全的适配器
 
-1. **端侧设备天然异构**。C3 是 HTTP 被推（Pi 主动 POST `/set`）；P4 是 MQTT 对话
-   （设备发起、流式回复、带保活/去重/4KB 切片）。硬套一层通用路由，得到的是
-   `if kind == 'http' ... elif kind == 'mqtt' ...` 的分支堆砌，**代码更长、更难读，却没有真通用**。
-2. **定制接入反而更安全**。每台设备一个独立进程 + 独立证书 + 独立 ACL 角色：
+1. **爆炸半径**。每台设备一个独立进程 + 独立证书 + 独立 ACL 角色：
    任一设备被攻破，只影响它自己的主题与凭据，**爆炸半径被物理隔离**。
    反之一个「万能路由」进程持有所有设备的凭据，攻破即全失。
-3. **契约是设备专属的**。P4 的五条硬约束（4KB / id 回传 / final 恰好一次 / 20s 保活 / 不 retained）
-   是为那块 LVGL 屏定的；换一块屏就得重定。把这些塞进「通用层」会让通用层被单一设备的怪癖污染。
+2. **改动半径**。P4 的五条硬约束（4KB / id 回传 / final 恰好一次 / 20s 保活 / 不 retained）
+   是为那块 LVGL 屏定的；换一块屏就得重定。**定在设备目录里**，核心不必知道 ——
+   更不会因为某台设备的怪癖把核心改坏。
 
-#### 代码层的实际情况（证据）
+> ⚠️ **注意这里的因果**：设备异构**不是**"做不到插件化"的理由，恰恰是**要做插件化**的理由。
+> 异构反对的是「统一指令集」，不是「统一边界」。
 
-`pihub/` 的设备指令路径是**一台设备一个常量**：
+#### 代码层的现状（证据）
+
+这些常量现在**各在各的设备目录里**，核心不再认识任何一台设备：
 
 ```python
-# app/devctl.py:36-37
-CMD_TOPIC = "hub/command/smalltv"        # 写死 smalltv
+# devices/smalltv/devctl.py
+CMD_TOPIC = "hub/command/smalltv"
 ACK_TOPIC = "hub/command/smalltv/ack"
 
-# app/wecom_bot.py:83-84
-CMD_TOPIC = "hub/command/smalltv"        # 又一份，两份各自维护
+# devices/smalltv/bot.py          ← 也是 smalltv，但常量在本目录里，不跨目录共享
+CMD_TOPIC = "hub/command/smalltv"
 
-# app/p4_bot.py:40-41     ← 2026-10-28
+# devices/p4/bot.py
 CMD_TOPIC = "hub/command/p4"
 CMD_ACK_TOPIC = "hub/command/p4/ack"
 
-# app/car_bot.py:40-41    ← 2026-10-30，照 p4_bot.py 同构
+# devices/car/bot.py
 CMD_TOPIC = "hub/command/car"
 CMD_ACK_TOPIC = "hub/command/car/ack"
 ```
 
-设备地址也是单值：`ip = cfg("smalltv_ip", "")`（不是 `dev_id -> addr` 的映射）。
+设备地址也是单值，但**只出现在小电视自己的目录里**：`ip = cfg("smalltv_ip", "")`。
+`core/config.py` 的默认表里**没有任何设备键**（设备 IP、凭据键、推送目标键都不种）。
 
-`p4-agent/` 稍好一点：`P4_DEVICE_ID` 可配、主题 `f"{prefix}/chat/{DEVICE_ID}"` 按设备拼接，
-但一个进程只订阅一个 topic——**接第二台得再起一个 systemd 实例**。
+`devices/p4/bridge.py`：`P4_DEVICE_ID` 可配、主题 `f"{prefix}/chat/{DEVICE_ID}"` 按设备拼接，
+但一个进程仍只订阅一个 topic —— **接第二台得再起一个 systemd 实例**（刻意的隔离）。
 
-⇒ **这是设计选择，不是待修的短板。**
+⇒ **边界收敛已完成**（核心与设备之间的那条线）。判据是「加一个目录就能接，核心零改动」，
+[`devices/_template/`](../devices/_template/) 就是这个判据的可执行形式 ——
+复制它、填六处，`core/` 一行不改。契约与验收判据见 [DEVICE-PLUGIN.md](../docs/DEVICE-PLUGIN.md)。
 
-📌 **但"复制一份改三处"是有代价的，得说清楚**：
-`p4_bot.py`、`car_bot.py` 都继承 `wecom_bot.py`，**只覆盖四处**（凭据来源 / 指令表 / 主题 / 回执配对），
-所以基类里修过的坑（心跳线程泄漏、退避重置、pending 无界增长）不会重犯——**这是继承带来的，不是复制带来的**。
-真正复制的是那一整套「peek 循环 + 超时扫描 + 回执配对」的骨架：
-三个文件里各有一份，将来改一处**得记得改三处**。
-目前接受这个代价（三个文件共 ≈ 675 行，读起来直白）；**若接第四台，再考虑抽基类**，
-而不是现在就为一个还没出现的需求做抽象。
+📌 **共享的是骨架，复制的是话术**：三个机器人都继承 `core/wecom_base.py` 的 `WeComBot`，
+连接 / 心跳 / 重连退避 / 回执配对的骨架都在基类里，修一处三处受益。
+但每台设备**「超时了怎么跟人说话」**措辞不同（`P4 暂无响应`、`小车暂无响应（<动作>）`），
+所以 `_sweep_pending` 与扫描线程在各设备目录里各有一份 —— **这是尚未收口的重复**。
+等第四台设备真出现时再抽成「基类钩子 + 子类只覆写一句话术」；现在不提前抽象。
 
 #### ★ “C 层通用”的准确含义：**交互级通用，非指令级通用**
 
@@ -469,8 +472,8 @@ CMD_ACK_TOPIC = "hub/command/car/ack"
 | **接入入口** | ✅ **通用** | 企微机器人做统一交互入口，你可以接入**任何 Agent 或端侧设备**，各自建机器人 |
 | **告警外发** | ✅ **通用** | `hub/alert/#` 全通配，新增告警类型不用改订阅 |
 | **推送目标** | ⚠️ 半通用 | `get_target_chat()` 支持多会话，但一次只推一个，**无按类型分流** |
-| **指令集** | ❌ **必须自己定** | 每台设备的指令语义不同。`command.py` 的 `set_mode`/`set_brightness`/`set_wallpaper` 全是 C3 小电视专用 |
-| **指令路由** | ❌ **单设备** | `CMD_TOPIC = "hub/command/smalltv"` 写死 |
+| **指令集** | ❌ **必须自己定** | 每台设备的指令语义不同。`devices/smalltv/command.py` 的 `set_mode`/`set_brightness`/`set_wallpaper` 全是 C3 小电视专用 |
+| **指令路由** | ❌ **单设备** | 一个插件一个进程、一个 `CMD_TOPIC`（写在自己目录里）；同型号的第二台要再起一个实例 |
 
 > **框架给你留好了插座，但每个插头得你自己做。**
 > 一个 C3 小电视，用小车的运动控制指令，这就闹笑话了。
@@ -478,18 +481,18 @@ CMD_ACK_TOPIC = "hub/command/car/ack"
 
 #### ⚠️ 给使用者的建议：接入你自己的端侧设备
 
-**不推荐**你改 `pihub/` 去适配新设备（那里是行情/天气/企微的业务逻辑，动它风险高）。
+**不要**去改 `core/` 适配新设备（那里是行情/天气/企微基类，与设备无关）。
 推荐路径：
 
-1. **照着 `p4-agent/` 抄一个适配器**。它是最小完整样本：订主题 → 调能力 → 回结果，
-   单文件 483 行，含保活/去重/超时/错误码全套。
-2. **让 Agent 自己帮你写**。把 `docs/P4-PI-AGENT-SPEC.md` + `p4-agent/` 同时喂给你的 Agent
+1. **复制 `devices/_template/` 开一个新目录**。空壳已把骨架填好（连上 → 订阅 → 解析 → 执行 → 回执），
+   要改的六处都有 `TODO`；`devices/p4/` 是填好的完整样本，含保活 / 去重 / 超时 / 错误码全套。
+2. **让 Agent 自己帮你写**。把 P4 仓的 `docs/mqtt-contract.md` + `devices/_template/` 同时喂给你的 Agent
    （Claude Code / OpenClaw 等），说明你的设备通信方式，让它生成一个同构适配器。
    这是本项目的设计假定：**接入工作交给 Agent，人只负责验收**。
 3. **新设备只动这三处**，不碰核心：
    - `config/aclfile.example` 加一段 `user <新设备角色>` + 最窄主题
    - `mosquitto_passwd` 加一个账号
-   - 新的 `<设备>-agent/` 目录 + 自己的 systemd 单元
+   - 新的 `devices/<设备>/` 目录 + 自己的 systemd 单元
 4. **保持隔离**：一台设备一套证书、一个 ACL 角色、一个进程。
 
 > 这样做的代价是「每接一台要写一次」，收益是**每台设备的失败都关在自己的盒子里**。
@@ -499,7 +502,7 @@ CMD_ACK_TOPIC = "hub/command/car/ack"
 
 ### 🔴 已修：P4 对话上下文丢失
 
-**问题**：`p4_agent.py` 早期用 `conv = f"conv:p4-{msg_id}"` 当会话 ID。
+**问题**：`bridge.py`（原名 `p4_agent.py`）早期用 `conv = f"conv:p4-{msg_id}"` 当会话 ID。
 `msg_id` 每句话都不同 ⇒ **每句一个全新会话**，P4 上无法多轮对话
 （说"把它改成 30"这种指代完全失效）。
 
@@ -582,8 +585,8 @@ _publish() 失败 → _publish_final_error("internal", "回复内容过长，已
 **实测**：
 
 ```
-systemctl stop p4-agent      -> Failed to stop: 连接超时
-systemctl restart p4-agent   -> Failed to restart: 连接超时
+systemctl stop p4-agent      -> Failed to stop: 连接超时      （当时服务名，今为 pihub-p4-bridge）
+systemctl restart p4-agent   -> Failed to restart: 连接超时   （同上；已修，见下方「已修」）
 systemctl kill -s SIGKILL    -> Failed to kill: 连接超时   （signals 也走同一路径）
 kill -9 <pid>                -> 立即生效
 ```
@@ -609,7 +612,7 @@ kill -9 <pid>                -> 立即生效
 ### 🔵 设计选择（不是缺陷）
 
 - **每设备一个适配器**：见 §9.1
-- **`pihub/` 指令路径单设备硬编码**：见 §9.1
+- **每台设备的指令路径写在自己的目录里**：见 §9.1
 - **`check_hostname=False` + `tls_insecure_set(True)`**：因为内网 IP 会变、
   证书 SAN 可能不含新 IP。靠 CA 校验链 + 双向证书保证，放弃主机名校验。
   在家庭内网可接受，**不建议用于公网**。
@@ -619,6 +622,9 @@ kill -9 <pid>                -> 立即生效
 ## 10. 相对「裸装的基线」改了什么
 
 ### ⚠️ 先说重要结论
+
+> 📜 **本节是历史快照**（2026-10-27，当时还是 `app/` 布局）。保留原文是为了可回溯；
+> 文件名与路径已不是今天的样子（现见 §3）。**别照着这里的路径去改代码。**
 
 **`app/` 下这 10 个文件与本仓的初始基线逐字节完全一致**（已用 `diff` 全部核对）。
 
@@ -660,9 +666,11 @@ acceptance_s9.sh  SAME
 - systemd：`pihub/` 原 4 个单元与基线一致（基线仓内已有 4 个 .service）
            → 2026-10-28 加 pihub-p4-bot.service
            → 2026-10-30 加 pihub-car-bot.service   ⇒ 现共 6 个
-           实际部署在 /etc/systemd/system/，6 个全部 enabled
-- ★ 另有第 7 个服务 p4-agent（不在基线的任何版本里）
-           位置 /home/pi/cooperate/p4-agent，独立目录，enabled + active
+           → 2026-11-22 部署树由 app/ 切到 core/ + devices/，7 个单元一并改写
+                        （ExecStart 全部指向新布局；旧 app/ 与 devices/p4/app/ 改名退役）
+           实际部署在 /etc/systemd/system/，7 个全部 enabled
+- ★ 另有第 7 个服务 pihub-p4-bridge（不在基线的任何版本里；2026-11-20 由 p4-agent 改名）
+           位置 /home/pi/cooperate/pihub/devices/p4（已并入主仓树），enabled + active
            它把 ESP32-P4 接入 OpenClaw Agent，已实测可对话（日志有真实收发记录）
 - 防火墙：无（ufw 未安装）
 - Python：仅 requirements.txt 所列 + 间接依赖；websocket-client 为企微长连接必需
@@ -674,15 +682,20 @@ acceptance_s9.sh  SAME
 
 ### 本分支额外补充的文件（相对 main）
 
+> 📜 **这是 2026-10-30 当时的差异清单**，路径仍是 `app/` 布局；之后目录分家、
+> 部分 P4 深度文档已退役（现布局见 §3，插件契约见 [DEVICE-PLUGIN.md](../docs/DEVICE-PLUGIN.md)）。
+> 保留作历史。
+
 ```text
 deploy/DEPLOY.md              新增（本文件）
 config/mosquitto-pihub.conf   修改（基线是单 listener，改为实机双 listener 结构）
 config/aclfile.example        新增（ACL 角色骨架，已脱敏）
 docs/P4-PI-AGENT-SPEC.md      新增（P4 接入契约，密码/IP 已脱敏）
 docs/P4-PI-HANDOFF.md         新增（P4 交接与自验，密码/IP 已脱敏）
-p4-agent/                     新增（P4 ↔ OpenClaw 桥接适配器，完整目录）
+devices/p4/                   新增（P4 ↔ OpenClaw 桥接适配器，完整目录；
+                              2026-11-20 由仓库根的 p4-agent/ 迁入）
   ├─ app/p4_agent.py          桥接主程序
-  ├─ systemd/p4-agent.service
+  ├─ systemd/p4-agent.service  （文件名保留；实机单元名为 pihub-p4-bridge.service）
   ├─ .env.example             环境变量样例（值全空）
   └─ README.md
 README.md                     重写（底座导向，去掉固件/硬件内容）
@@ -703,12 +716,12 @@ app/api.py                    修改（HTTP 白名单 + 被动学 C3 的 IP，�
 .env.example                  修改（三组独立企微凭据 + http_allow）
 ```
 
-### 本次对 p4_agent.py 的修正（相对原始部署版本）
+### 本次对 `bridge.py`（原 `p4_agent.py`）的修正（相对原始部署版本）
 
 | 项 | 原值 | 改后 | 理由 |
 |---|---|---|---|
 | `MQTT_HOST` 默认值 | `<PI_LAN_IP>`（内网 IP） | `127.0.0.1` | 适配器与 broker 同机，走回环即可；去掉硬编码 IP |
-| 证书路径默认值 | 绝对路径 `/home/pi/cooperate/p4-agent/certs/*` | 相对本文件解析 → `<repo>/p4-agent/certs/*` | 换部署目录无需改代码 |
+| 证书路径默认值 | 绝对路径 `/home/pi/cooperate/p4-agent/certs/*` | 相对本文件解析 → `<repo>/devices/p4/certs/*` | 换部署目录无需改代码 |
 | **会话 ID** | `f"conv:p4-{msg_id}"` | `f"conv:{DEVICE_ID}-main"` | **修 bug**：原写法每句一个新会话，多轮上下文全丢（§9.2） |
 | **并发闸** | 无限制（每条消息一个线程） | `MAX_CONCURRENT=1` 严格串行，超出回 `agent_busy` | P4 不排队，并发会抢同一气泡（§9.2） |
 | **SIGTERM 处理** | 无（只有 `KeyboardInterrupt`） | 注册信号 → `shutdown_evt`；`loop_start()` + `wait()` | **修 bug**：否则 `systemctl stop/restart` 必然超时（§9.2） |
@@ -740,10 +753,10 @@ python3 -m venv .venv
 cp .env.example .env
 chmod 600 .env
 # 编辑 .env：填 WECOM_CORP_ID / WECOM_BOT_ID / WECOM_BOT_SECRET
-#           不接企微可以三个都留空（wecom_bot 会以降级模式运行）
+#           不接企微可以三个都留空（devices/smalltv/bot.py 会以降级模式运行）
 
 # 5) 建库
-.venv/bin/python app/init_db.py
+.venv/bin/python core/init_db.py
 mkdir -p logs
 
 # 6) 录配置（★ 必做，否则发指令必失败）
@@ -780,24 +793,31 @@ sudo chmod 640 /etc/mosquitto/aclfile /etc/mosquitto/passwd
 sudo systemctl restart mosquitto
 
 # 9) 安装服务（★ 先确认 systemd 单元里的绝对路径与你的部署目录一致）
+#    单元分散在 systemd/ 与 devices/*/systemd/（[!_] 跳过 _template 空壳）
 sudo cp systemd/*.service /etc/systemd/system/
+sudo cp devices/[!_]*/systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pihub-api pihub-devctl pihub-monitor pihub-wecom-bot
 
 # 9b) 可选：P4 Agent 适配器（需要 ESP32-P4 控制面板时才装）
 #     它要求 broker 的 8883 TLS 监听已就绪（步骤 8）
-cd p4-agent
+cd devices/p4
+#     ⚠️ `devices/p4/` 下**不需要**自己的 venv：现役实机这一步用的是系统 /usr/bin/python3
+#        （系统 paho-mqtt 2.1.0，与 requirements 一致，可直接跑）。
+#        部署树根的 `.venv` 是给其余 6 个服务用的，与此处无关。
+#        只有确实想隔离 P4 依赖时才在这里另建 —— 那时**必须同时**把 systemd 单元
+#        里的 ExecStart 从 /usr/bin/python3 改成 devices/p4/.venv/bin/python。
 python3 -m venv .venv && .venv/bin/pip install paho-mqtt
 cp .env.example .env && chmod 600 .env
 #     填 P4_MQTT_PASS（agent 账号密码）与 P4_GATEWAY_TOKEN
-#     证书放到 p4-agent/certs/：ca.crt / agent.crt / agent.key
-sudo cp systemd/p4-agent.service /etc/systemd/system/
+#     证书放到 devices/p4/certs/：ca.crt / agent.crt / agent.key
+sudo cp systemd/pihub-p4-bridge.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now p4-agent
+sudo systemctl enable --now pihub-p4-bridge
 cd ..
 
 # 10) 验证
-systemctl is-active pihub-api pihub-devctl pihub-monitor pihub-wecom-bot p4-agent mosquitto
+systemctl is-active pihub-api pihub-devctl pihub-monitor pihub-wecom-bot pihub-p4-bot pihub-p4-bridge pihub-car-bot mosquitto
 ss -lntp | grep -E '5000|1883|8883'
 curl -s localhost:5000/api/health
 ./acceptance_s9.sh check
@@ -807,7 +827,7 @@ curl -s localhost:5000/api/health
 
 | 项 | 本机值 | 换机器怎么办 |
 |---|---|---|
-| 部署路径 | `/home/pi/cooperate/pihub` | 改 4 个 systemd 单元里的绝对路径 |
+| 部署路径 | `/home/pi/cooperate/pihub` | 改各 systemd 单元里的绝对路径（单元跟着目录走） |
 | 运行用户 | `pi` | 改 unit 的 `User=`/`Group=` |
 | 证书 | 自签 10 年期，至 2036-10-20 | 重新生成一套（**不要复用本机的**） |
 | `smalltv_ip` | 真值在 DB | 填入你自己设备的 IP |
@@ -830,15 +850,15 @@ curl -s localhost:5000/api/health
 | `/etc/mosquitto/certs/*.crt` | 不提交 | `.gitignore` 已挡 `*.crt` |
 | 设备 IP（`smalltv_ip`） | 替换 `<REDACTED>` | `.env.example` 中该字段为空 |
 | `wecom_chat_id` / `wecom_bot_id` | 替换 `<REDACTED>` | |
-| `app/*.bak.2026*`（6 个调试备份） | 不提交 | 含硬编码内网 IP；`.gitignore` 已加 `*.bak.*` |
-| `app/__pycache__/` | 不提交 | `.gitignore` 已挡 |
-| `p4-agent/.env` | 整文件不提交 | 12 个键，含 `P4_MQTT_PASS` / `P4_GATEWAY_TOKEN`；仓内只放 `.env.example` |
-| `p4-agent/certs/*.key`（5 个） | 不提交 | `agent.key` / `p4.key` / `observer.key` / `broker.key` / `ca.key`，`.gitignore` 已挡 `*.key` |
-| `p4-agent/certs/*.crt` | 不提交 | 同 `.gitignore` `*.crt` |
-| `p4-agent/logs/` | 不提交 | `.gitignore` 已挡 `logs/*` 与 `*.log` |
-| `docs/P4-PI-HANDOFF.md` 里的 observer 密码 | **打码** | 原文明文写着一个可用密码，改为 `-P '<REDACTED>'` |
+| `*.bak.2026*`（6 个调试备份，改造前在 `app/`） | 不提交 | 含硬编码内网 IP；`.gitignore` 已加 `*.bak.*` |
+| `__pycache__/` | 不提交 | `.gitignore` 已挡 |
+| `devices/p4/.env` | 整文件不提交 | 12 个键，含 `P4_MQTT_PASS` / `P4_GATEWAY_TOKEN`；仓内只放 `.env.example` |
+| `devices/p4/certs/*.key`（5 个） | 不提交 | `agent.key` / `p4.key` / `observer.key` / `broker.key` / `ca.key`，`.gitignore` 已挡 `*.key` |
+| `devices/p4/certs/*.crt` | 不提交 | 同 `.gitignore` `*.crt` |
+| `devices/p4/logs/` | 不提交 | `.gitignore` 已挡 `logs/*` 与 `*.log` |
+| `docs/P4-PI-HANDOFF.md`（已随 P4 深度文档退役）里的 observer 密码 | **打码** | 原文明文写着一个可用密码，改为 `-P '<REDACTED>'` |
 | 内网 IP `<PI_LAN_IP>` | 替换 `<PI_LAN_IP>` | 出现在 HANDOFF 的 Host / 证书 SAN / mosquitto_sub 例句共 3 处 |
-| `p4_agent.py` 里的 `<PI_LAN_IP>` 默认值 | **改为 `127.0.0.1`** | 不是打码，是改默认值（走回环更合理） |
+| `bridge.py`（原 `p4_agent.py`）里的 `<PI_LAN_IP>` 默认值 | **改为 `127.0.0.1`** | 不是打码，是改默认值（走回环更合理） |
 | 图片（如有） | 本仓未包含 | 底座不含 assets |
 
 > 上表第三行起还说明了一件事：**能跑起来的最小真值是"你自己生成的东西"** ——
@@ -855,7 +875,7 @@ curl -s localhost:5000/api/health
 - [x] Mosquitto 的密码/ACL **内容**没有贴（ACL 只贴角色→主题骨架）
 - [x] DB 只贴 schema 与 config 键名，没有贴 `symbols` / `wecom_chat` 数据
 - [x] 复现步骤是"另一台机器能照做"的粒度，并标出了本机特有项
-- [x] 相对基线的差异摘要已写（结论：`app/` 零差异，改动全在仓外）
+- [x] 相对基线的差异摘要已写（2026-10-27 的结论：当时 `app/` 零差异、改动全在仓外；之后的结构改造见 §10）
 
 ---
 

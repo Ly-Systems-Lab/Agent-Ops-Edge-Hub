@@ -11,8 +11,8 @@ import os
 import sqlite3
 import time
 
-from datasource import (fetch_quote, fetch_minute,
-                        fetch_weather, build_spark)
+from core.datasource import (fetch_quote, fetch_minute,
+                             fetch_weather, build_spark)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(BASE)

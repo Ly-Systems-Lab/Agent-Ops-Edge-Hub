@@ -11,13 +11,13 @@
 > **一套独立证书 · 一个独立 ACL 角色 · 一段按主题收窄的授权**。
 > 任何一环缺失，这条路径都不成立。
 
-[`p4-agent/`](../p4-agent/) 是**设备侧**的样本（订阅命令 → 调设备 → 回结果）；
+[`devices/p4/`](../devices/p4/) 是**设备侧**的样本（订阅命令 → 调设备 → 回结果）；
 本目录是**指令源侧**的对称物（发命令 → 等配对回执）。两者合起来，
 才是一条完整的 `Agent → broker → 设备 → 回执` 闭环。
 
 > ⚠️ **P4 面板与小车只是这套闭环的最小示范，不是这个设计的边界。**
 > 任何订阅 `hub/command/<设备>` 的端侧设备都能接进来 ——
-> 设备侧照 [`p4-agent/`](../p4-agent/) 写一个适配器，
+> 设备侧照 [`devices/p4/`](../devices/p4/) 写一个适配器，
 > 接入方这边改一张指令表（见 [接入你自己的设备](#接入你自己的设备)）。
 > 本目录**刻意不为"某台具体设备"设限**：协议层是通用的，定制只在两端各一张表。
 
@@ -154,7 +154,7 @@ python -m winagent <设备> <指令> [参数]
    总线上可能同时有别人的回执；id 对不上的一律丢弃。
 
 3. **不自动重试。**
-   设备侧**不按 `id` 去重**（`p4-agent` 的命令路径只做入队 → 执行），
+   设备侧**不按 `id` 去重**（`devices/p4/bridge.py` 的命令路径只做入队 → 执行），
    重复投递 = 重复执行。`close_all` 幂等无碍，`music` / `aichat` 会再开一次。
    ⇒ 本客户端**没有任何重试逻辑**，失败就如实返回。
 
@@ -168,7 +168,7 @@ python -m winagent <设备> <指令> [参数]
      `spin` 2.4 s、`showoff` **22.0 s**、`music` 0.09 s。
      ⇒ **超时必须按指令给**，一个全局 8 秒会让 `showoff` 永远超时。
 
-   ⚠️ **"先回『已受理』、动作结束再补 `done`"说的是 `app/car_bot.py` 发给企微的那条消息**，
+   ⚠️ **"先回『已受理』、动作结束再补 `done`"说的是 `devices/car/bot.py` 发给企微的那条消息**，
    **不是总线上的 ack**。2026-11-03 用 `spin` / `showoff` 实测：两条长指令都只收到
    **1 条** ack，中途一条都没有。
    ⇒ **别把"给人看的受理文案"当成"MQTT 协议行为"** —— 这两层只差一层，很容易混。
@@ -185,7 +185,7 @@ python -m winagent <设备> <指令> [参数]
 
 | 端 | 改什么 | 在哪 |
 |---|---|---|
-| 设备侧 | 写一个同构适配器：订阅 `hub/command/<你的设备>`、执行、回 `<设备>/ack` | 照 [`p4-agent/`](../p4-agent/) 抄 |
+| 设备侧 | 写一个同构适配器：订阅 `hub/command/<你的设备>`、执行、回 `<设备>/ack` | 照 [`devices/p4/`](../devices/p4/) 抄 |
 | 授权侧 | 给设备一个 ACL 角色、给每个接入方一个只含那几行的角色 | [`config/aclfile.example`](../config/aclfile.example) |
 | 客户端 | 在指令表里加一条：`设备名 → 主题 / 指令 / 默认超时` | [`winagent/__main__.py`](winagent/__main__.py) 的 `DEVICES` |
 
@@ -217,7 +217,7 @@ python -m winagent <设备> <指令> [参数]
 
 | 内容 | 出处 |
 |---|---|
-| P4 反控命令与 ack 字段 | [`docs/P4-PI-AGENT-SPEC.md §11`](../docs/P4-PI-AGENT-SPEC.md) |
-| 小车指令表与回执措辞 | [`app/car_command.py`](../app/car_command.py) |
+| P4 反控命令与 ack 字段 | P4 仓 [`docs/mqtt-contract.md §11`](https://github.com/Ly-Systems-Lab/Agent-Ops-P4-Terminal/blob/main/docs/mqtt-contract.md#11-反控命令) |
+| 小车指令表与回执措辞 | [`devices/car/command.py`](../devices/car/command.py) |
 | 主题空间与 ACL | [`docs/SECURITY.md`](../docs/SECURITY.md) · [`config/aclfile.example`](../config/aclfile.example) |
-| 为什么不做通用路由 | [`docs/ARCHITECTURE.md §四`](../docs/ARCHITECTURE.md) |
+| 插件边界怎么划 | [`docs/DEVICE-PLUGIN.md`](../docs/DEVICE-PLUGIN.md) · [`docs/ARCHITECTURE.md §四`](../docs/ARCHITECTURE.md) |

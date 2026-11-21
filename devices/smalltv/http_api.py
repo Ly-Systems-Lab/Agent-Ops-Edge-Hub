@@ -35,13 +35,20 @@ import ipaddress
 
 from flask import Flask, Response, jsonify, request
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import cache as cache_mod
-from config import get as cfg
+# —— B2：把仓库根放进 sys.path，core.* / devices.* 才 import 得到 ——
+# 往上退到「含 core/ 的那一层」为止，不数层数（数层数正是证书路径踩过的坑）。
+_p = os.path.dirname(os.path.abspath(__file__))
+while not os.path.isdir(os.path.join(_p, "core")):
+    _parent = os.path.dirname(_p)
+    if _parent == _p:
+        raise SystemExit(f"找不到仓库根：{__file__} 之上没有 core/")
+    _p = _parent
+if _p not in sys.path:
+    sys.path.insert(0, _p)
+from core import cache as cache_mod
+from core.config import get as cfg
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-PROJECT = os.path.dirname(BASE)
-DB_PATH = os.environ.get("PIHUB_DB", os.path.join(PROJECT, "data", "pihub.db"))
+from core.paths import DB_PATH
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False

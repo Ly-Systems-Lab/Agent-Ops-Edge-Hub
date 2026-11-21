@@ -3,7 +3,7 @@
 """
 P4 控制面板 ↔ 树莓派 Agent 适配器
 
-依据契约：docs/P4-PI-AGENT-SPEC.md（本仓内）
+依据契约：Agent-Ops-P4-Terminal 仓 docs/mqtt-contract.md
 
 职责：
   1. 订阅 hub/chat/p4，收到用户指令
@@ -43,8 +43,8 @@ MQTT_HOST = os.environ.get("P4_MQTT_HOST", "127.0.0.1")
 MQTT_PORT = int(os.environ.get("P4_MQTT_PORT", "8883"))
 MQTT_USER = os.environ.get("P4_MQTT_USER", "agent")
 MQTT_PASS = os.environ.get("P4_MQTT_PASS", "")
-# 证书路径默认相对本文件解析（<repo>/p4-agent/certs/），换部署目录无需改代码
-_CERTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "certs")
+# 证书路径默认相对本文件解析（<repo>/devices/p4/certs/），换部署目录无需改代码
+_CERTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
 CA_FILE = os.environ.get("P4_CA_FILE", os.path.join(_CERTS, "ca.crt"))
 # 每个客户端一张独立证书（双向认证的要求，出问题可单点吊销）
 CERT_FILE = os.environ.get("P4_AGENT_CERT", os.path.join(_CERTS, "agent.crt"))
@@ -375,7 +375,7 @@ def handle(client, payload):
     # ★ 严格串行闸（MAX_CONCURRENT=1）：P4 屏上只有一个气泡。
     #   实测：P4 并不会等上一句回完才发下一句（-0003 还在流式时就发出了 -0004），
     #   两者并发会互相抢流，用户看到的就是「排队」。既然物理形态是一次一句，
-    #   就在 Pi 侧直接拒掉后来者（agent_busy 是 SPEC §5.3 允许的四个错误码之一）。
+    #   就在 Pi 侧直接拒掉后来者（agent_busy 是 mqtt-contract.md §5.3 允许的四个错误码之一）。
     #
     #   注意：拒绝发生在 dedup 标记之前，所以**新 id** 被拒时没有被标记，
     #   用户重发同一句话仍会正常执行（不会被当成重复忽略）。

@@ -32,9 +32,8 @@
 | 逻辑闭环、可靠性机制、架构边界 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) |
 | 安全边界、ACL 全文、HTTP 加固路线 | [`docs/SECURITY.md`](./docs/SECURITY.md) |
 | 部署实况：单元、端口、配置键、设备清单 | [`deploy/DEPLOY.md`](./deploy/DEPLOY.md)（最厚的一本账） |
-| P4 接入契约（主题/报文/超时/反控） | [`docs/P4-PI-AGENT-SPEC.md`](./docs/P4-PI-AGENT-SPEC.md) |
-| P4 侧交接与自验清单 | [`docs/P4-PI-HANDOFF.md`](./docs/P4-PI-HANDOFF.md) |
-| P4 ↔ OpenClaw 桥接适配器本身 | [`p4-agent/README.md`](./p4-agent/README.md) |
+| P4 接入契约（主题/报文/超时/反控） | 另一个仓：`Agent-Ops-P4-Terminal` 的 `docs/mqtt-contract.md` |
+| P4 ↔ OpenClaw 桥接适配器本身 | [`devices/p4/README.md`](./devices/p4/README.md) |
 | 指令源侧客户端（Windows Agent 反控设备） | [`win-agent/README.md`](./win-agent/README.md) |
 | 企微接入教程（纯教程，非全量代码） | [`ai-agent-wecom/README.md`](./ai-agent-wecom/README.md) |
 | 控制面（企微 ⇄ Claude Code） | 另一个仓：`Agent-Ops-WeCom-Bridge` |
@@ -48,10 +47,10 @@
 
 1. **公开仓三道闸，顺序固定**：① 我扫隐私/凭据 → ② **用户人工过目** → ③ 才推，
    **GitHub 与 Gitee 两个远端都要**。建仓**第一个文件永远是 `.gitignore`**。
-2. 🔴 **`docs/P4-PI-HANDOFF.md` 不许整文件覆盖。**
-   **根因**：Pi 侧那份原件从来没打码，每次从 Pi 同步都会把 `p4` 明文密码原样带回来、
-   并顺手删掉本仓已经做过的订正。**这是结构性复发，不是偶发** —— 同步时先看过再合。
-3. **凭据一个都不进仓**：`.env`、`*.key`、`*.crt`、`passwd`、`*/certs/`（`p4-agent/certs/`）。
+2. 🔴 **从 Pi 侧同步任何文件前，先逐行看过再合，不许整文件覆盖。**
+   **根因**：Pi 侧原件可能从来没打码，整文件覆盖会把明文凭据原样带回来、
+   并顺手删掉本仓已经做过的订正。**这是结构性复发，不是偶发**。
+3. **凭据一个都不进仓**：`.env`、`*.key`、`*.crt`、`passwd`、`*/certs/`（`devices/p4/certs/`）。
    `config/*.example` 只能是**骨架**（键名 + 注释，值全空或 `<REDACTED>`）。
    ⚠️ **轮换过密码也一样** —— 新密码同样不许进仓；仓里永远是 `<REDACTED>`。
 
@@ -84,7 +83,7 @@
 
 3. 🚨 **三套企微凭据（C3 / P4 / 小车）不可复用。**
    复用同一对 `BOT_ID/SECRET` 会让"这条消息该谁处理"变得不可预测；
-   而且一个泄露就连带三台设备。`app/{wecom_bot,p4_bot,car_bot}.py` 各读自己那对。
+   而且一个泄露就连带三台设备。`devices/{smalltv,p4,car}/bot.py` 各读自己那对。
 
 4. 🎯 **两台设备的应答模型不同，是刻意的，别"统一"掉。**
    - P4：**同步等回执，5 s 超时**（开 app 基本秒开）。
@@ -105,7 +104,7 @@
 
 7. 🎯 **"文档说没有" ≠ "没有"；"手上的副本有" ≠ "部署有"。**
    本仓两次栽在这上面：
-   - SPEC 写着「反控 v1 不实现，别先用」，而 Pi 侧 **2026-10-28 就已经在用了**；
+   - 旧版 SPEC 写着「反控 v1 不实现，别先用」，而 Pi 侧 **2026-10-28 就已经在用了**；
    - 以为同步齐了，其实 `p4_bot.py` / `p4_command.py` **压根没拉进来**（但 README 已经在讲它们）。
    ⇒ **判断"某能力有没有"，先去部署侧核，别只看文档或副本。**
 
@@ -117,7 +116,7 @@
    这是 `config/mosquitto-pihub.conf` 里最容易漏的一处。
 
 10. **systemd + paho：`loop_forever()` 不响应 SIGTERM** ⇒ `systemctl stop` 必然等到超时。
-    `p4-agent` 用的是 `loop_start()` + 事件等待。**新写的常驻进程照这个来。**
+    `devices/p4/bridge.py` 用的是 `loop_start()` + 事件等待。**新写的常驻进程照这个来。**
 
 11. 🚨 **paho 2.x 不捕获 `on_message` 里的异常**，同一个根因两种静默坏法：
     - `loop_start()`（三个机器人）：只有网络线程死，**进程还活着** ⇒ WS 还连着、
@@ -126,7 +125,7 @@
     典型触发：**合法 JSON 但不是对象**（`[]` / `123` / `"x"`），下一行 `.get()` 就炸。
     特别注意 `payload.get("extra") or {}` —— **数组是 truthy，`or {}` 兜不住**，
     `{"extra":[1]}` 会一路炸到 `extra.get("tid")`。
-    ⇒ 边界层 `app/mqtt_guard.py` 包住所有回调；类型层显式 `isinstance(dict)`。
+    ⇒ 边界层 `core/mqtt_guard.py` 包住所有回调；类型层显式 `isinstance(dict)`。
 
 12. 🚨 **多进程共用一个 SQLite 库时，"全局 config 键"就是竞争资源。**
     三个机器人各写自己的 `wecom_chat_id` ⇒ 谁最后收到消息，谁改掉**告警**的推送目标。
@@ -142,7 +141,7 @@
 14. 🎯 **算"帧多大"要按序列化之后算，不是按原始字符算。**
     `"` → `\"`、`\` → `\\`（各 +1），控制字符 → `\u00XX`（+5）。
     按原始 UTF-8 切出来的"3500 字节预算"，实际发出去能到 7000 ⇒ 撞硬上限被丢弃。
-    敏感点是 `p4_agent.split_deltas` / `_esc_len`。
+    敏感点是 `devices/p4/bridge.py` 的 `split_deltas` / `_esc_len`。
 
 15. 🚨 **自检脚本本身会污染被测系统。**
     `acceptance_s9.sh` 从 Pi 自己的 wlan0 IP 发 GET，源地址就是 Pi 的 WiFi IP
@@ -158,15 +157,15 @@
 - **本仓没有自动化测试。** 能跑的只有：
   ```bash
   bash -n acceptance_s9.sh                 # shell 语法
-  python -I -W error::SyntaxWarning -c "import ast,glob;[ast.parse(open(f,encoding='utf-8').read(),f) for f in glob.glob('app/*.py')+glob.glob('p4-agent/app/*.py')]"
-  python -X utf8 app/car_command.py         # 指令表自测（唯一带自测样例的；
-                                            # 其余 11 个文件的 __main__ 都是服务入口，别乱跑。
-                                            # p4_command.py / mqtt_guard.py 没有 __main__）
+  python -I -W error::SyntaxWarning -c "import ast,glob;[ast.parse(open(f,encoding='utf-8').read(),f) for f in glob.glob('core/*.py')+glob.glob('devices/*/*.py')]"
+  python -X utf8 devices/car/command.py     # 指令表自测（唯一带自测样例的；
+                                            # 其余文件的 __main__ 都是服务入口，别乱跑。
+                                            # devices/p4/command.py / core/mqtt_guard.py 没有 __main__）
   ```
   ⚠️ 别用 `-I` 跑带中文输出的脚本 —— `-I` 隐含 `-E`，会忽略 `PYTHONIOENCODING`，
   本机 GBK 控制台下全是乱码。**要中文输出用 `-X utf8`。**
 - **`acceptance_s9.sh` 只能在 Pi 上跑**（它查 systemd / ss / 真实设备可达性）。
-- **改 Python 之后**：`app/*.py` 是**在 Pi 上跑的**，本机只做静态检查；
+- **改 Python 之后**：`core/` 与 `devices/` 是**在 Pi 上跑的**，本机只做静态检查；
   真正的验收永远是"在 Pi 上重启服务 + 看日志"。
 - **改文档之后**：核一遍**同类数字**（见坑 8）和**跨文件引用**（ACL 片段、§ 编号、行号）。
   ⚠️ 写 `file.py:123` 这种行号引用前，**先 grep 确认那行到底是什么** ——

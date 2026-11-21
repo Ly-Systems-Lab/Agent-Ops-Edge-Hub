@@ -7,10 +7,10 @@ Wants=network-online.target mosquitto.service
 Type=simple
 User=pi
 Group=pi
-WorkingDirectory=/home/pi/cooperate/pihub/app
+WorkingDirectory=/home/pi/cooperate/pihub
 Environment=PYTHONUNBUFFERED=1
 Environment=PIHUB_DB=/home/pi/cooperate/pihub/data/pihub.db
-ExecStart=/home/pi/cooperate/pihub/.venv/bin/python /home/pi/cooperate/pihub/app/devctl.py
+ExecStart=/home/pi/cooperate/pihub/.venv/bin/python /home/pi/cooperate/pihub/devices/smalltv/devctl.py
 Restart=always
 RestartSec=5
 StandardOutput=append:/home/pi/cooperate/pihub/logs/devctl.log

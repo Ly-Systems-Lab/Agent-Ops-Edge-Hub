@@ -25,18 +25,9 @@ DEFAULT_CONFIG = {
     "weather_cache_sec": "600",         # 天气缓存 10 分钟
     "kline_ttl": "300",                 # 日K 缓存秒数（当天这根盘中在变，过期即重取）
     "upstream_fail_threshold": "5",     # 上游连续失败 N 次记日志/告警
-    "smalltv_ip": "",                   # ESP32 小电视 IP（§2.4 控制用，待填）
-    # 企微智能机器人（长连接 API 模式，§7）
-    "wecom_bot_id": "",                 # 智能机器人 BotID（凭证在 .env，勿入 git）
-    # ★ 推送目标按机器人分键，互不覆盖（2026-10-31）：
-    #   三个 bot 是三个进程但共用一个库，若都写 wecom_chat_id，谁最后收到消息
-    #   谁就改掉了告警机器人的推送目标 ⇒ 告警静默发错群。详见 wecom_bot.save_chat。
-    "wecom_chat_id": "",                # ① C3 小电视机器人：推送目标群 chatid
-    "wecom_chat_type": "2",             # 1 单聊 / 2 群聊
-    "wecom_chat_id_p4": "",             # ② P4 面板机器人（首次收到回调后落库）
-    "wecom_chat_type_p4": "2",
-    "wecom_chat_id_car": "",            # ③ 曼波小车机器人
-    "wecom_chat_type_car": "2",
+    # ⚠️ **设备专属键不在这里**（设备 IP、凭据键、推送目标键都不种）：
+    #    它们随设备走、由设备自己按需写库（凭据在 .env，推送目标在首次收到消息时落库）。
+    #    分键规则见 core/wecom_base.py 的 save_chat()。
 }
 
 

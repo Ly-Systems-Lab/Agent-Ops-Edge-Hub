@@ -104,6 +104,9 @@ user p4                                  # 设备侧
 
 ### 被动学习设备 IP（`smalltv_ip`）
 
+> 位置：[`devices/smalltv/http_api.py`](../devices/smalltv/http_api.py)。
+> `smalltv_ip` 是**设备专属键**，核心不种它（见 [DEVICE-PLUGIN.md](DEVICE-PLUGIN.md)）。
+
 C3 来取数（`/api/stock*`、`/api/weather`）时，Pi 把它的真实源 IP 记进 `smalltv_ip`。
 四道边界：只认 **GET**、只认 **5000** 端口、拒绝回环、**只从白名单内学习**；
 同一 IP **30 s** 内只写一次库。并且**拒绝把本机地址当成设备** ——
@@ -115,7 +118,7 @@ C3 来取数（`/api/stock*`、`/api/weather`）时，Pi 把它的真实源 IP �
 
 - **凭据一个都不进仓**：`.env`、`*.key`、`*.crt`、`passwd` 全部 `.gitignore`；
   仓内样例只有键名与 `<REDACTED>`。轮换过密码也一样。
-- **systemd 单元里没有密钥**：所有凭据走 `.env`（`p4-agent` 用 `EnvironmentFile=`），
+- **systemd 单元里没有密钥**：所有凭据走 `.env`（`pihub-p4-bridge` 用 `EnvironmentFile=`），
   这样单元文件可以原样进仓。
 - **每个机器人一套企微凭据**：`WECOM_*` / `P4_WECOM_*` / `CAR_WECOM_*` 不复用；
   复用会让「这条消息该谁处理」不可预测，且一个泄露连带多台设备。

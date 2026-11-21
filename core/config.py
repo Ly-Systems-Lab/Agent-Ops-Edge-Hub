@@ -8,9 +8,10 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(BASE)
 DB_PATH = os.environ.get("PIHUB_DB", os.path.join(PROJECT, "data", "pihub.db"))
 
+# ⚠️ 这里只放**与设备无关**的键。设备专属的（IP / 凭据键 / 推送目标键）
+#    一律在各自的 devices/<name>/ 里 —— 核心不认识任何设备，
+#    契约见 docs/DEVICE-PLUGIN.md。
 DEFAULTS = {
-    "wecom_webhook_key": "",
-    "smalltv_ip": "",
     "mqtt_host": "127.0.0.1",
     "mqtt_port": "1883",
     "pihub_host": "127.0.0.1",  # 仅作占位；服务端绑定已改为 0.0.0.0（免疫换 IP），客户端一律走回环

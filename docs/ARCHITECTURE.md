@@ -33,17 +33,17 @@ flowchart LR
 数据面本身**不产生意图**。它的职责只有两件：把意图**送进物理世界**，
 再把结果**带回可观测的状态**。
 
-### 常驻服务（`pihub/` 6 个 + `p4-agent` 1 个）
+### 常驻服务（7 个：`core/` 1 个 + `devices/` 6 个）
 
 | 服务 | 脚本 | 干什么 |
 |---|---|---|
-| `pihub-api` | `app/api.py` | Flask HTTP 接口（`:5000`，**IP 白名单**），供 ESP32 与外部调用 |
-| `pihub-devctl` | `app/devctl.py` | 订阅 `hub/command/smalltv`（**只这一个**），转成设备 HTTP 指令 |
-| `pihub-monitor` | `app/monitor.py` | 行情轮询 → 涨跌停 / 异动告警 → `hub/alert/#` |
-| `pihub-wecom-bot` | `app/wecom_bot.py` | 企微智能机器人双向：收消息下发指令 / 推告警（小电视） |
-| `pihub-p4-bot` | `app/p4_bot.py` | P4 专属机器人：中文指令 → `hub/command/p4` |
-| `pihub-car-bot` | `app/car_bot.py` | 小车专属机器人：中文指令 → `hub/command/car` |
-| `p4-agent` | `p4-agent/app/p4_agent.py` | P4 面板 ↔ OpenClaw Agent 桥接（MQTT → Gateway 流式） |
+| `pihub-api` | [`devices/smalltv/http_api.py`](../devices/smalltv/http_api.py) | Flask HTTP 接口（`:5000`，**IP 白名单**），供 ESP32 与外部调用 |
+| `pihub-devctl` | [`devices/smalltv/devctl.py`](../devices/smalltv/devctl.py) | 订阅 `hub/command/smalltv`（**只这一个**），转成设备 HTTP 指令 |
+| `pihub-monitor` | [`core/monitor.py`](../core/monitor.py) | 行情轮询 → 涨跌停 / 异动告警 → `hub/alert/#` |
+| `pihub-wecom-bot` | [`devices/smalltv/bot.py`](../devices/smalltv/bot.py) | 企微智能机器人双向：收消息下发指令 / 推告警（小电视） |
+| `pihub-p4-bot` | [`devices/p4/bot.py`](../devices/p4/bot.py) | P4 专属机器人：中文指令 → `hub/command/p4` |
+| `pihub-p4-bridge` | [`devices/p4/bridge.py`](../devices/p4/bridge.py) | P4 面板 ↔ OpenClaw Agent 桥接（MQTT → Gateway 流式） |
+| `pihub-car-bot` | [`devices/car/bot.py`](../devices/car/bot.py) | 小车专属机器人：中文指令 → `hub/command/car` |
 
 > ⚠️ **每个机器人 = 一个独立企微账号 = 一对独立凭据**（`WECOM_*` / `P4_WECOM_*` / `CAR_WECOM_*`）。
 > 复用同一对凭据会让「这条消息该谁处理」变得不可预测。
@@ -61,7 +61,7 @@ flowchart LR
 sequenceDiagram
     participant A as Agent
     participant B as MQTT broker
-    participant H as 适配器<br/>devctl / 各设备机器人 / p4-agent
+    participant H as 适配器<br/>devctl / 各设备机器人 / pihub-p4-bridge
     participant D as 端侧设备
 
     A->>B: hub/command/<设备>  {v, id, cmd}
@@ -76,7 +76,7 @@ sequenceDiagram
 
 | 流 | 方向 | 主题 | 谁产出 / 谁消费 |
 |---|---|---|---|
-| 告警 | 上游 → 人 | `hub/alert/#` | `monitor.py` → `wecom_bot.py`（全通配，新增类型不用改订阅） |
+| 告警 | 上游 → 人 | `hub/alert/#` | `core/monitor.py` → `devices/smalltv/bot.py`（全通配，新增类型不用改订阅） |
 | 指令 | 入口 → 设备 | `hub/command/{smalltv,p4,car}` | `devctl` / 各设备机器人 → 设备 |
 | 回执 | 设备 → 入口 | `hub/command/<设备>/ack`、`hub/chat/p4/reply` | 设备 → 机器人 / P4 |
 
@@ -96,7 +96,7 @@ sequenceDiagram
 
 P4 不仅能发消息，也能被 MQTT 反控（`music` / `aichat` / `close_all`）。
 命令走 `hub/command/p4`，回执走 `hub/command/p4/ack`，与上行对话共用同一套 ACL 与凭据。
-契约见 [P4-PI-AGENT-SPEC.md §11](P4-PI-AGENT-SPEC.md#11-反控命令c15-步-12026-10-28-起可用)。
+契约见 P4 仓 [mqtt-contract.md §11](https://github.com/Ly-Systems-Lab/Agent-Ops-P4-Terminal/blob/main/docs/mqtt-contract.md#11-反控命令)。
 
 **反控的主体不止 Pi 侧。** 任何持有独立凭据的接入方 —— 另一台电脑上的 Agent、
 你自己的服务 —— 只要 broker 给它一段授权，就能指挥对应的端侧设备。
@@ -120,13 +120,13 @@ P4 不仅能发消息，也能被 MQTT 反控（`music` / `aichat` / `close_all`
 |---|---|
 | **进程级自恢复** | 全部 7 个 systemd 单元均 `Restart=always` |
 | **QoS 1 全链路** | 指令下发、回执、告警 publish / subscribe 一律 `qos=1` |
-| **断线重连** | paho `loop_start()` 内置自动重连；`p4-agent` 额外 `reconnect_delay_set(1, 30)` 指数退避 |
-| **信号兼容** | `p4-agent` 用 `loop_start` + 事件等待而非 `loop_forever`，保证 `systemctl stop` 能跟手退出（否则必然超时） |
-| **告警冷却持久化** | `monitor.py` 的冷却写 SQLite，**重启不重推**；且只在确认发出后才记冷却，断连时留给下一轮重试 |
-| **重复下发去重** | `devctl.py` 对同一 `id` 重复指令只执行一次，回执标「重复下发，未再次执行」 |
-| **帧大小防线** | `p4-agent` 硬限 `MAX_FRAME_BYTES=4096`，超限不静默丢弃，而是降级发最小错误帧 |
-| **会话保活 / 超时** | `p4-agent` 用 keepalive 帧 + 硬超时（`HARD_TIMEOUT_SEC`），超时回 `agent_timeout` 错误码 |
-| **并发闸** | `p4-agent` 严格串行（`MAX_CONCURRENT=1`），防连点打满后端 |
+| **断线重连** | paho `loop_start()` 内置自动重连；`pihub-p4-bridge` 额外 `reconnect_delay_set(1, 30)` 指数退避 |
+| **信号兼容** | `pihub-p4-bridge` 用 `loop_start` + 事件等待而非 `loop_forever`，保证 `systemctl stop` 能跟手退出（否则必然超时） |
+| **告警冷却持久化** | `core/monitor.py` 的冷却写 SQLite，**重启不重推**；且只在确认发出后才记冷却，断连时留给下一轮重试 |
+| **重复下发去重** | `devices/smalltv/devctl.py` 对同一 `id` 重复指令只执行一次，回执标「重复下发，未再次执行」 |
+| **帧大小防线** | `pihub-p4-bridge` 硬限 `MAX_FRAME_BYTES=4096`，超限不静默丢弃，而是降级发最小错误帧 |
+| **会话保活 / 超时** | `pihub-p4-bridge` 用 keepalive 帧 + 硬超时（`HARD_TIMEOUT_SEC`），超时回 `agent_timeout` 错误码 |
+| **并发闸** | `pihub-p4-bridge` 严格串行（`MAX_CONCURRENT=1`），防连点打满后端 |
 | **入口隔离** | MQTT 连不上只告警，**绝不拖垮语音 / 业务主循环** |
 
 > 💡 **为什么是这些机制**：物理动作不可回滚。重发不会"更准"，只会多执行一次 ——
@@ -134,19 +134,18 @@ P4 不仅能发消息，也能被 MQTT 反控（`music` / `aichat` / `close_all`
 
 ---
 
-## 四、架构边界（这不是通用 MQTT 底座）
+## 四、架构边界（核心不认识任何设备）
 
-这个项目是**两种架构的结合体**，分清哪层通用、哪层不通用，才好判断适不适合你：
+**主张只有一条：一切皆插件。** 分清哪层通用、哪层按设备定制，才好判断适不适合你：
 
 | 层 | 是什么 | 通用？ |
 |---|---|---|
-| **A. 端侧定制接入** | 每台设备写专属适配器（小电视 / P4 面板 / 将来的机械臂），主题与报文各自定制 | ❌ **刻意不通用** |
+| **A. 端侧接入（插件）** | 每台设备一个自包含目录，填同一张六格表（主题 / 解析 / 渲染 / 凭据 / 目标 / 单元） | ✅ **边界通用**；指令与报文由插件自定 |
 | **B. Agent ↔ 设备互联** | Agent 经 MQTT / HTTP 与设备双向互通（P4 已跑通：MQTT → Gateway 流式 → 回推） | 结构可复用，接入需定制 |
 | **C. 企微机器人分层管理** | 企微作统一交互入口，可接任意 Agent / 端侧设备，各建机器人 | ⚠️ **交互级通用；指令集须按设备自定** |
 
-> **通用的是「怎么管」，不是「怎么接」。**
-> 适配器长得都像「订主题 + 调能力 + 回结果」的小服务，所以体感上像通用框架，
-> 但那是**形态相似**，不是抽象通用。
+> **通用的是「边界与生命周期」，定制的是「指令与报文」。**
+> 每个插件都填同一张六格表 —— 抽象的是**形状**，不是**语义**。
 
 ⚠️ **C 层的「通用」是「交互级通用」，不是「指令级通用」：**
 
@@ -155,39 +154,54 @@ P4 不仅能发消息，也能被 MQTT 反控（`music` / `aichat` / `close_all`
   新增告警类型不用改订阅。
 - ⚠️ **指令级（必须自己定）**：**每台设备的指令集得使用者按自己的端侧设备定义。**
   给小电视发"左转" / 给小车发"切换壁纸"，两边都会懵。
-  本仓 `command.py` 解析的 `set_mode` / `set_brightness` / `set_wallpaper` 全是小电视专用；
+  本仓 `devices/smalltv/command.py` 解析的 `set_mode` / `set_brightness` / `set_wallpaper` 全是小电视专用；
   换设备必须重写解析。
 - ⚠️ **推送单目标**：`get_target_chat()` 一次只推一个会话，没有按类型分流。
 
-### 为什么刻意不做多设备路由
+### 为什么是插件，而不是一个大而全的适配器
 
-1. **设备天然异构** —— C3 是 HTTP 被推，P4 是 MQTT 对话（带保活 / 去重 / 4 KB 切片）。
-   强套通用路由只会得到分支堆砌，代码更长却没真通用。
-2. **定制反而更安全** —— 每台设备独立进程 + 独立证书 + 独立 ACL 角色，
+1. **爆炸半径** —— 每台设备独立进程 + 独立证书 + 独立 ACL 角色，
    一台被攻破只影响它自己，**爆炸半径物理隔离**；反之一人持所有凭据，攻破即全失。
-3. **契约是设备专属的** —— P4 的五条硬约束（4 KB / `id` 回传 / `final` 恰好一次 /
-   20 s 保活 / 不 retained）是为那块屏定的；换一块屏就得重定。
-   把这些塞进「通用层」，会让通用层被单一设备的怪癖污染。
+2. **改动半径** —— 指令集、报文格式、超时规则都是**设备的怪癖**，就放在设备目录里。
+   核心不必为每台设备长分支，新增设备也不去碰核心。
 
-**代码层的实际情况**：`pihub/` 的设备指令路径是**一台设备一个常量**
-（`CMD_TOPIC = "hub/command/smalltv"` / `hub/command/p4` / `hub/command/car`），
-设备地址也是单值（`smalltv_ip`，不是 `dev_id → addr` 映射）。
-`p4-agent/` 稍好一点：主题按 `DEVICE_ID` 拼接，但一个进程只订阅一个 topic ——
-接第二台得再起一个 systemd 实例。
+**指令与契约归设备，不归核心。** P4 的五条硬约束（4 KB / `id` 回传 / `final` 恰好一次 /
+20 s 保活 / 不 retained）是为那块屏定的；换一块屏就重定，**定在新目录里**，
+不是塞进核心让核心被单一设备的怪癖污染。
 
-⇒ **这是设计选择，不是待修的短板。**
-完整论证与代码证据：[DEPLOY.md §9.1](../deploy/DEPLOY.md#91--架构定位这是两种架构的结合体不是通用-mqtt-底座)。
+### 传输方式是选型，不是架构
+
+| 设备形态 | 推荐 | 理由 |
+|---|---|---|
+| 低性能 MCU | HTTP（被推） | 省掉长连接与重连状态机，固件里最紧的就是这部分 |
+| 跑得动 MQTT 的设备 | MQTT | QoS 1、按主题收窄的 ACL、与其余设备同一套总线 |
+
+MQTT 强行套到低性能 MCU 上也**能做**，只是不划算 —— 那是资源账，不是架构账。
+⇒ **一台走 HTTP 的设备当插件，和一台走 MQTT 的设备当插件，在架构上是同一件事。**
+把"不做通用路由"读成"所以做不到插件化"，是读反了。
+
+**代码层的现状**：分工已经落到目录上 —— `core/` 只保留**与设备无关**的
+行情 / 天气 / 企微基类 / MQTT 守卫；每台设备一个自包含目录
+（[`devices/smalltv/`](../devices/smalltv/)、[`devices/p4/`](../devices/p4/)、
+[`devices/car/`](../devices/car/)），主题、指令解析、回执渲染、凭据键、推送目标键
+全在各自目录里。**加一台设备 = 加一个目录，核心零改动** ——
+[`devices/_template/`](../devices/_template/) 就是这个判据的可执行形式。
+契约见 [DEVICE-PLUGIN.md](DEVICE-PLUGIN.md)，验收判据见其 §六。
+
+完整论证与代码证据：[DEPLOY.md §9.1](../deploy/DEPLOY.md#91--架构定位核心不认识任何设备一切皆插件)。
 
 ### 接入你自己的端侧设备
 
-**不推荐**改 `pihub/`（那里是行情 / 天气 / 企微的业务逻辑，动它风险高）。推荐路径：
+**不要**改 `core/`（那里是行情 / 天气 / 企微基类，与设备无关）—— 新设备写在自己的目录里。推荐路径：
 
-1. **照 `p4-agent/` 抄一个适配器** —— 它是最小完整样本：订主题 → 调能力 → 回结果，
-   单文件含保活 / 去重 / 超时 / 错误码全套。
-2. **更省事的做法：让你的 Agent 帮你写**。把 [P4-PI-AGENT-SPEC.md](P4-PI-AGENT-SPEC.md)
-   和 `p4-agent/` 一起喂给 Claude Code / OpenClaw 等，说明你设备的通信方式，
+1. **复制 [`devices/_template/`](../devices/_template/)** —— 空壳已填好骨架
+   （连上 → 订阅 → 解析 → 执行 → 回执），要改的六处都标了 `TODO`；
+   [`devices/p4/`](../devices/p4/) 是填好的完整样本（含保活 / 去重 / 超时 / 错误码全套）。
+2. **更省事的做法：让你的 Agent 帮你写**。把 P4 仓的
+   [mqtt-contract.md](https://github.com/Ly-Systems-Lab/Agent-Ops-P4-Terminal/blob/main/docs/mqtt-contract.md)
+   和 `devices/_template/` 一起喂给 Claude Code / OpenClaw 等，说明你设备的通信方式，
    让它生成同构适配器。**这是本项目的设计假定：接入工作交给 Agent，人只负责验收。**
-3. **新设备只动两 / 三处**：新建 `<设备>-agent/` 目录 + 自己的 systemd 单元；
+3. **新设备只动两 / 三处**：新建 `devices/<设备>/` 目录 + 自己的 systemd 单元；
    **走 MQTT 的设备再加** `config/aclfile.example` 一段 `user <角色>` 与
    `mosquitto_passwd` 一个账号（走 HTTP 的设备不需要）。
 
@@ -205,10 +219,10 @@ P4 不仅能发消息，也能被 MQTT 反控（`music` / `aichat` / `close_all`
 | **P4 无用户鉴权** | `hub/chat/p4` 靠 mTLS + ACL 做「设备级信任」，不是「用户级鉴权」—— 拿到 P4 的人就能对 Agent 说任何话。家庭内部可接受，带出门需评估 |
 | **HTTP 无认证** | `5000` 只有 IP 白名单，没有 token / 签名。仅限受信网段 + 绑设备固定 IP |
 | **推送单目标** | `get_target_chat()` 一次只推一个会话，没按告警类型分流 |
-| **单设备路由** | `pihub/` 的指令路径按设备硬编码；接新设备要写新适配器（设计选择） |
-| **适配器骨架有复制** | `p4_bot.py` / `car_bot.py` 继承 `wecom_bot.py`（基类只改四处），但「peek 循环 + 超时扫描 + 回执配对」各有一份，改一处要记得改三处 |
-| **固定会话会累积** | `p4-agent` 的会话 ID 固定为 `conv:<DEVICE_ID>-main`，历史持续累积；要清空须重启 Gateway 或换 `DEVICE_ID` |
-| **主机名校验关闭** | `p4-agent` 用 `check_hostname=False` + `tls_insecure_set(True)`，因为内网 IP 会变。靠 CA 链 + 双向证书保证；**不建议用于公网** |
+| **一进程一设备** | `devices/*/` 的适配器一个进程只订阅自己的主题；**同型号的第二台**要再起一个 unit 实例（换 `DEVICE_ID`）。这是刻意的：爆炸半径隔离优先于省进程 |
+| **回执扫描有复制** | 三个 bot 共用基类，但 `_sweep_pending`（超时话术按设备不同）与扫描线程在 P4 / 小车目录里各有一份；抽成「基类钩子 + 只覆写话术」尚未做 |
+| **固定会话会累积** | `pihub-p4-bridge` 的会话 ID 固定为 `conv:<DEVICE_ID>-main`，历史持续累积；要清空须重启 Gateway 或换 `DEVICE_ID` |
+| **主机名校验关闭** | `pihub-p4-bridge` 用 `check_hostname=False` + `tls_insecure_set(True)`，因为内网 IP 会变。靠 CA 链 + 双向证书保证；**不建议用于公网** |
 | **无冗余 / 无 SLA** | 单机部署，没有故障演练。这是参考实现，不是生产级系统 |
 
 ---
@@ -220,7 +234,7 @@ P4 不仅能发消息，也能被 MQTT 反控（`music` / `aichat` / `close_all`
 | 三条规约（可靠 / 安全 / 隔离）的全文 | [DATA-PLANE-CHARTER.md](DATA-PLANE-CHARTER.md) |
 | 安全边界、ACL 全文、HTTP 加固路线 | [SECURITY.md](SECURITY.md) |
 | 从零部署、端口、配置键、设备清单 | [DEPLOY.md](../deploy/DEPLOY.md) |
-| P4 的主题 / 报文 / 超时契约 | [P4-PI-AGENT-SPEC.md](P4-PI-AGENT-SPEC.md) |
-| P4 侧已实现到什么程度 | [P4-PI-HANDOFF.md](P4-PI-HANDOFF.md) |
+| 怎么接一台新设备（插件边界与六格表） | [DEVICE-PLUGIN.md](DEVICE-PLUGIN.md) |
+| P4 的主题 / 报文 / 超时契约 | P4 仓 [docs/mqtt-contract.md](https://github.com/Ly-Systems-Lab/Agent-Ops-P4-Terminal/blob/main/docs/mqtt-contract.md) |
 | 外部接入方怎么安全反控设备 | [`win-agent/`](../win-agent/) |
 | 三件套的顶层设计与协同约定 | [Agent-Ops-Architecture](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) |

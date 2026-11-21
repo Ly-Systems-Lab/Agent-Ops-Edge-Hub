@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Pi Hub 企微 Bot（依据 PI_HUB_SPEC.md §7，长连接 API 模式）。
+"""企微智能机器人 —— 长连接基类（**不含任何设备**）。
 
-架构（§0 角色表：企微 Bot = 订阅 MQTT → 推送到手机；接收指令 → 控制设备）：
-  ┌ 企业微信 智能机器人（长连接 WebSocket）  ┐
-  │  wss://openws.work.weixin.qq.com        │
-  │  aibot_subscribe(bot_id, secret)        │
-  │  ← aibot_msg_callback / event_callback  │  收到用户消息 → 记录 chatid
-  │  → aibot_send_msg (主动推送)             │  MQTT 告警 → 推到群聊
-  └─────────────────────────────────────────┘
-  ↑ MQTT subscribe hub/alert/#           ↓ MQTT 可选 hub/command/smalltv
+三个设备机器人（`devices/smalltv/bot.py`、`devices/p4/bot.py`、`devices/car/bot.py`）
+都继承这里的 `WeComBot`。本文件只放它们**真正共用**的那部分：
+
+  - WebSocket 长连接 / 订阅 / 心跳 / 重连退避（连上即归零）
+  - 被动回复（response_url）与主动推送（aibot_send_msg）
+  - chatid 持久化（按 bot 分键，互不覆盖）
+  - **回执配对**：pending 表 + 超时扫描 + 无 pending 时改推默认会话
+
+设备自己的东西一律不在这里：主题、指令表、回执渲染、凭据键、日志落点。
+接一台新设备的契约见 docs/DEVICE-PLUGIN.md。
 
 关键约束（官方文档 §7）：
-  - 智能机器人「主动推送」要求：用户先在会话里给机器人发过消息，才可向该会话推送。
-    → 首次收到 aibot_msg_callback 时把 chatid 落 SQLite(wecom_chat)，后续告警复用。
+  - 「主动推送」要求用户先给机器人发过消息，才可向该会话推送
+    → 首次收到 aibot_msg_callback 时把 chatid 落 SQLite，后续复用。
   - 心跳：每 30s 发 ping 保活；断线需自动重连。
-  - 频率限制：单会话 30 条/分钟，1000 条/小时（告警侧已有 1h 冷却，另加分钟级防刷）。
-
-运行：cd /home/pi/cooperate/pihub && .venv/bin/python app/wecom_bot.py
-自测：--send-test "内容" 直接向已记录 chatid 推一条测试（不起 MQTT）。
+  - 频率限制：单会话 30 条/分钟，1000 条/小时（告警侧另有冷却）。
 """
-import argparse
 import json
 import os
 import sqlite3
@@ -30,12 +28,18 @@ import time
 import uuid
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# —— B2：把仓库根放进 sys.path，core.* / devices.* 才 import 得到 ——
+# 往上退到「含 core/ 的那一层」为止，不数层数（数层数正是证书路径踩过的坑）。
+_p = os.path.dirname(os.path.abspath(__file__))
+while not os.path.isdir(os.path.join(_p, "core")):
+    _parent = os.path.dirname(_p)
+    if _parent == _p:
+        raise SystemExit(f"找不到仓库根：{__file__} 之上没有 core/")
+    _p = _parent
+if _p not in sys.path:
+    sys.path.insert(0, _p)
 import websocket  # websocket-client
-import paho.mqtt.client as mqtt
-from config import get as cfg
-from command import parse_command, describe, HELP_TEXT
-import mqtt_guard
+from core.config import get as cfg
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(BASE)
@@ -66,24 +70,11 @@ BACKOFF_START = 3
 BACKOFF_MAX = 30
 
 # 「等待回执」记录的超时与上限（详见 _sweep_pending 的说明）。
-# 45s 的依据：正常回执路径 = devctl 冷却(≤1.5s) + 转发 ESP32(HTTP 超时 12s) + 回程，
+# 45s 的依据：正常回执路径 = 适配器内部处理 + 设备往返 + 回程，
 # 实测在 15s 内完成；等满 45s 基本可以断定这条回执不会来了。
 _PENDING_TTL = 45          # 秒：超过仍未收到 ack ⇒ 判「结果未知」
 _PENDING_MAX = 200         # 硬上限兜底，防无界增长
 _PENDING_SWEEP_SEC = 15    # 扫描间隔
-
-# 告警类型 → 中文标题
-ALERT_TITLES = {
-    "limit_up": "涨停警报",
-    "limit_down": "跌停警报",
-    "surge": "异动提醒",
-    "weather_warning": "天气预警",
-}
-
-# §7.2 指令总线（方案 A：企微指令必走 MQTT）
-CMD_TOPIC = "hub/command/smalltv"
-CMD_ACK_TOPIC = "hub/command/smalltv/ack"
-
 
 def _log(msg):
     line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}"
@@ -98,14 +89,14 @@ def _conn():
 
 # ---------------- chatid 持久化 ----------------
 def save_chat(chatid, chat_type, label=None,
-              target_key="wecom_chat_id", type_key="wecom_chat_type"):
+              target_key="wecom_chat_id_default", type_key="wecom_chat_type_default"):
     """记录可主动推送的会话（首次收到用户消息时）。
 
     ★ 为什么带 target_key（2026-10-31）：
     三个设备机器人是三个进程，但**共用同一个 SQLite 库**，而 config 表里的
-    `wecom_chat_id` 是**全局唯一键** —— 谁最后收到消息，谁就顺手改掉了
+    那一个键是**全局唯一键** —— 谁最后收到消息，谁就顺手改掉了
     告警机器人的推送目标。后果不是报错，而是**静默发错群**：
-    小电视 bot 把涨停警报发到小车那个会话时，它根本不在那个群、企微会拒收；
+    A 设备的 bot 把告警发到 B 设备那个会话时，它根本不在那个群、企微会拒收；
     而 send_markdown 的 ok 只看 websocket 有没有发出去，不看服务端 errcode。
     ⇒ 每个 bot 用自己的一组键（TARGET_KEY / TYPE_KEY），互不覆盖。
 
@@ -128,7 +119,7 @@ def save_chat(chatid, chat_type, label=None,
                       (key, val, now))
 
 
-def get_target_chat(target_key="wecom_chat_id", type_key="wecom_chat_type",
+def get_target_chat(target_key="wecom_chat_id_default", type_key="wecom_chat_type_default",
                     label=None):
     """返回 (chatid, chat_type)；优先**本 bot 自己的键**，其次最近活跃会话。"""
     cid = cfg(target_key)
@@ -147,94 +138,13 @@ def get_target_chat(target_key="wecom_chat_id", type_key="wecom_chat_type",
     return None, ctype
 
 
-# ---------------- 消息格式化 ----------------
-STOCK_TYPES = ("limit_up", "limit_down", "surge")
-
-
-def _fmt_missing(v, suffix=""):
-    """数值字段的展示兜底。None / 空串 / 非法值 → 「（数据缺失）」。
-
-    ★ 为什么要有（2026-10-31 修）：
-      原来直接 f"¥{price}"，而 price 取不到时是 None ⇒ 群里收到「现价 ¥None」。
-      None 不会报错，只会静默地把「没数据」伪装成「数据是 None」，最容易被当真的。
-    """
-    if v is None or v == "":
-        return "（数据缺失）"
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return str(v)
-    # 保持与旧版一致的展示：1688.00 → 1688.0、3 → 3.0、4.12 → 4.12
-    # 不能用 :g —— 它会把 1688.0 显示成 1688，悄悄改变了已验收的格式
-    s = f"{f:.2f}".rstrip("0")
-    if s.endswith("."):
-        s += "0"
-    return s + suffix
-
-
-def format_alert(topic, payload):
-    """MQTT 主题+payload → 企微 markdown 文本（§7.2 示例风格）。"""
-    atype = topic.rsplit("/", 1)[-1] if "/" in topic else topic
-    title = ALERT_TITLES.get(atype, "提醒")
-    sym = payload.get("symbol", "") or ""
-    label = payload.get("label") or sym
-    # 代码：sh600519 -> 600519
-    code = sym[2:] if len(sym) > 2 and sym[:2] in ("sh", "sz") else sym
-
-    if atype == "weather_warning":
-        return (f"**⚠️ {title}**\n"
-                f"> 城市：{payload.get('city','')}\n"
-                f"> 等级：{payload.get('level','')}\n"
-                f"> {payload.get('text','')}")
-
-    # ★ 2026-10-31：只有确定是股票类告警才走股票模板。
-    #   原来用「不是 weather_warning ⇒ 股票」，于是任何**未知主题**
-    #   （hub/alert/xxx 拼错、带了子路径、将来新增类型）都会被渲染成
-    #   「> ()\n> 现价 ¥None 涨幅 +None%」—— 长得像股票告警，实际全是空值。
-    #   这里改成白名单：认不出就走通用兜底，把 payload 原样列出。
-    if atype in STOCK_TYPES:
-        price = payload.get("price")
-        pct = payload.get("pct")
-        sign = ""
-        try:
-            sign = "+" if float(pct) >= 0 else ""
-        except (TypeError, ValueError):
-            sign = ""
-        head = f"> {label}({code}) " if sym else "> （未提供标的）"
-        lines = [f"**{title}**", head.rstrip(),
-                 f"> 现价 ¥{_fmt_missing(price)}　涨幅 {sign}{_fmt_missing(pct, '%')}"]
-        if atype == "surge" and payload.get("threshold") is not None:
-            # 阈值单独格式化：不带 .0（±3% 而非 ±3.0%），与旧版展示保持一致
-            th = payload["threshold"]
-            try:
-                th_s = f"{float(th):g}"
-            except (TypeError, ValueError):
-                th_s = str(th)
-            lines.append(f"> 触发阈值：±{th_s}%")
-        lines.append(f"> {datetime.now().strftime('%H:%M:%S')}")
-        return "\n".join(lines)
-
-    # 通用兜底：未知告警类型，不猜语义，原样陈述，绝不拼 None
-    lines = [f"**{title}**", f"> 类型：{atype}"]
-    if payload.get("raw") is not None:
-        # 上游 JSON 解析失败时 on_message 会塞成 {"raw": 原文}
-        raw = str(payload.get("raw"))[:200]
-        lines.append("> ⚠️ 原文（非 JSON 对象，未解析）：")
-        lines.append(f"> {raw}")
-    else:
-        for k in ("symbol", "label", "price", "pct", "threshold", "city", "level", "text"):
-            if payload.get(k) is not None:
-                lines.append(f"> {k}：{payload[k]}")
-    lines.append(f"> {datetime.now().strftime('%H:%M:%S')}")
-    return "\n".join(lines)
-
-
 # ---------------- WebSocket 长连接 ----------------
 class WeComBot:
-    # ★ 每个机器人一套「主动推送目标」的配置键与会话标签（详见 save_chat 的说明）。
-    #   子类必须覆盖，否则三个 bot 会互相改写对方的推送目标。
-    TARGET_KEY = "wecom_chat_id"
-    TYPE_KEY = "wecom_chat_type"
+    # ★ 每个设备一套「主动推送目标」的配置键与会话标签（详见 save_chat 的说明）。
+    #   **设备插件必须覆盖这两个**——否则多个 bot 会互相改写对方的推送目标。
+    #   这里的默认值只给"忘了覆盖"兜底，故意取得让它们彼此不撞。
+    TARGET_KEY = "wecom_chat_id_default"
+    TYPE_KEY = "wecom_chat_type_default"
     CHAT_LABEL = "告警群"
 
     def __init__(self, on_message=None):
@@ -319,30 +229,8 @@ class WeComBot:
             _log(f"[reply] 失败: {e}")
             return False
 
-    def send_command(self, action, value, response_url=None, extra=None):
-        """发指令到 MQTT 总线 hub/command/smalltv（§7.2 方案 A：不自调 API）。
-        等待 devctl 执行后回 ack，再用 response_url 回群。
-        """
-        req_id = self._new_req_id()
-        if response_url:
-            with self._pending_lock:
-                # 记「发起时刻」供超时判定，记「业务 ID」让超时回报也能对上发起方的步骤
-                self.pending[req_id] = (response_url, time.time(),
-                                        (extra or {}).get("tid"))
-        payload = {"action": action, "value": value, "req_id": req_id}
-        if extra:
-            payload["extra"] = extra
-        if self.mqtt is None:
-            _log("[cmd] MQTT 未连接，无法发指令")
-            if response_url:
-                self.reply(response_url, "指令总线未连接，请稍后重试")
-            return False
-        self.mqtt.publish(CMD_TOPIC, json.dumps(payload, ensure_ascii=False), qos=1)
-        _log(f"[cmd] publish {CMD_TOPIC} {payload}")
-        return True
-
     def on_command_ack(self, payload):
-        """收到 hub/command/smalltv/ack，找回 response_url 回群。"""
+        """收到本设备的 ack 主题，找回 response_url 回群。"""
         req_id = payload.get("req_id")
         ok = payload.get("ok")
         msg = payload.get("msg", "")
@@ -362,7 +250,7 @@ class WeComBot:
         """清掉超时未回执的记录，并**明确回一句「结果未知」**。
 
         为什么需要：send_command 把 response_url 记进 self.pending，等 devctl 的 ack 回来再取用。
-        但 ack 可能**永远不来**（devctl 没起 / MQTT 断 / 指令根本没落到执行侧）。旧版只有
+        但 ack 可能**永远不来**（执行侧没起 / MQTT 断 / 指令根本没落到执行侧）。旧版只有
         「收到 ack 才删」，于是：① 执行器离线期间每条指令都留一条记录，反复重试则内存持续增长；
         ② 发起方**永远等不到任何回音**，只能一直干等或盲目重试。
 
@@ -458,23 +346,8 @@ class WeComBot:
                 _log(f"[ws] 记录会话 chatid={cid} type={ctype}")
             text = (body.get("text") or {}).get("content", "")
             _log(f"[ws] 收到消息: {text[:80]}")
-            # §7.2：解析指令 → 发 MQTT 总线 → devctl 执行 → ack 回群
-            rurl = body.get("response_url")
-            action, value, extra = parse_command(text)
-            if action and action != "help":
-                self.send_command(action, value, response_url=rurl, extra=extra)
-            elif action == "help":
-                # help 不走 MQTT，所以业务 ID 要在这里自己带上（与其他回执保持一致）
-                tid = (extra or {}).get("tid")
-                self.reply(rurl, f"[{tid}]\n{HELP_TEXT}" if tid else HELP_TEXT)
-            else:
-                # 未识别为指令：回一句引导（同时便于排障确认消息已到达）
-                self.reply(rurl, "收到～\n" + HELP_TEXT)
-                if self.on_message:
-                    try:
-                        self.on_message(body)
-                    except Exception as e:
-                        _log(f"[ws] on_message 异常: {e}")
+            # 指令的处理属于设备插件（核心不认识任何设备的指令集）
+            self.on_text(body, text)
             return
         if cmd == "aibot_event_callback":
             body = msg.get("body", {})
@@ -500,6 +373,18 @@ class WeComBot:
                 _log(f"[ws] 响应错误: {msg}")
             return
         _log(f"[ws] 未处理 cmd={cmd!r} raw={raw[:300]}")
+
+    # ---------- 收到用户文本：设备插件覆盖这里 ----------
+    def on_text(self, body, text):
+        """基类默认：不认任何指令，只把 body 交给 on_message 回调（若有）。
+
+        设备插件覆盖本方法来实现自己的指令表 —— 核心不认识任何设备的指令集。
+        """
+        if self.on_message:
+            try:
+                self.on_message(body)
+            except Exception as e:
+                _log(f"[ws] on_message 异常: {e}")
 
     def _on_error(self, ws, err):
         _log(f"[ws] error: {err}")
@@ -555,78 +440,3 @@ class WeComBot:
                 self.ws.close()
         except Exception:
             pass
-
-
-# ---------------- MQTT 订阅 ----------------
-def start_mqtt(bot, log_path):
-    host = cfg("mqtt_host") or "127.0.0.1"
-    port = int(float(cfg("mqtt_port") or 1883))
-
-    def on_connect(client, userdata, flags, rc, props=None):
-        client.subscribe("hub/alert/#", qos=1)
-        client.subscribe(CMD_ACK_TOPIC, qos=1)
-        _log(f"[mqtt] connected {host}:{port}, subscribed hub/alert/# + {CMD_ACK_TOPIC}")
-
-    def on_message(client, userdata, msg):
-        topic = msg.topic
-        try:
-            payload = json.loads(msg.payload.decode("utf-8"))
-        except Exception:
-            payload = {"raw": msg.payload.decode("utf-8", "ignore")}
-        if not isinstance(payload, dict):
-            # 合法 JSON 但不是对象（[] / 123 / "x"）⇒ format_alert 里的 .get() 会炸。
-            # 统一降级成 raw，和"非 JSON"走同一条路。
-            _log(f"[mqtt] {topic} 不是 JSON 对象（{type(payload).__name__}），按原文处理")
-            payload = {"raw": msg.payload.decode("utf-8", "ignore")}
-        if topic == CMD_ACK_TOPIC:
-            bot.on_command_ack(payload)
-            return
-        content = format_alert(topic, payload)
-        _log(f"[mqtt] {topic} -> 推送")
-        bot.send_markdown(content)
-
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pihub-wecom-bot")
-    client.on_connect = on_connect
-    # 兜底边界：漏网的异常不许冲出回调，否则 loop_start 的网络线程会静默退出
-    # （进程还活着、WS 还连着，但再也收不到消息）——见 mqtt_guard 的说明。
-    client.on_message = mqtt_guard.guard(on_message, _log)
-    client.connect(host, port, keepalive=30)
-    client.loop_start()
-    bot.mqtt = client
-    return client
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--send-test", metavar="TEXT", help="直接推送一条测试消息到已记录会话")
-    ap.add_argument("--chatid", help="指定测试推送的 chatid")
-    args = ap.parse_args()
-
-    if args.send_test:
-        bot = WeComBot()
-        # 测试模式：临时建立连接→订阅→推送→退出
-        bot.ws = websocket.WebSocketApp(
-            WS_URL, on_open=bot._on_open, on_message=bot._on_message,
-            on_error=bot._on_error, on_close=bot._on_close)
-        t = threading.Thread(target=bot.ws.run_forever, kwargs={"ping_interval": 0}, daemon=True)
-        t.start()
-        if not bot.subscribed.wait(timeout=10):
-            _log("[test] 订阅超时")
-        time.sleep(1)
-        bot.send_markdown(args.send_test, chatid=args.chatid)
-        time.sleep(2)
-        bot.stop_bot()
-        return
-
-    bot = WeComBot()
-    mqtt_client = start_mqtt(bot, None)
-    try:
-        bot.run_forever()
-    except KeyboardInterrupt:
-        _log("[main] 退出")
-    finally:
-        mqtt_client.loop_stop()
-
-
-if __name__ == "__main__":
-    main()

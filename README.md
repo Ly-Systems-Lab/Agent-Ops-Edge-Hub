@@ -68,14 +68,22 @@ C3 小电视 → P4 触控面板 → 具身智能小车：一条自然语言指�
 
 ### 🧱 三 · 隔离：一台设备的失败，关在它自己的主题里
 
-**不做「万能路由」。** 每台设备一个适配器进程；走 MQTT 的设备再各有一套凭据和
-ACL 角色，主题空间互不重叠。一台设备被攻破或写坏，影响面锁死在它自己的主题内。
+**一切皆插件。** 核心只提供总线、生命周期、回执配对与配置，**不认识任何设备**；
+每台设备是一个自包含目录，带自己的主题、指令解析、回执渲染、凭据与 systemd 单元。
+一台设备被攻破或写坏，影响面锁死在它自己的主题内。
 
-**为什么**：设备天然异构（小电视走 HTTP、P4 走 MQTT 对话、小车要异步回执），
-强做通用层只会得到分支堆砌；而一个持有所有设备凭据的进程，攻破即全失。
+**为什么**：一是**爆炸半径** —— 一个持有所有设备凭据的进程，攻破即全失；
+拆成插件，攻破一个只丢一个。二是**改动半径** —— 新增一台设备只落在一个目录里，
+核心代码不跟着长出分支。
 
-**怎么检验**：新增设备只加「一个适配器目录 + 一个 systemd 单元」
+**传输方式按设备资源选，不强制**：低性能 MCU 用 HTTP 更划算（省掉长连接与
+重连状态机）；跑得动 MQTT 的设备就上 MQTT（拿到 QoS 与按主题收窄的 ACL）。
+**这是选型，不是架构主张** —— 一台走 HTTP 的设备当插件，
+和一台走 MQTT 的设备当插件，在架构上是同一件事。
+
+**怎么检验**：新增设备只加「一个插件目录 + 一个 systemd 单元」
 （走 MQTT 的设备再加一个 ACL 角色），核心代码不动；删掉一台不影响其余链路。
+契约见 [docs/DEVICE-PLUGIN.md](docs/DEVICE-PLUGIN.md)。
 
 > 全文与取舍依据：**[docs/DATA-PLANE-CHARTER.md](docs/DATA-PLANE-CHARTER.md)**。
 
@@ -129,7 +137,7 @@ sequenceDiagram
 |---|---|
 | 受信任局域网内的**家用 / 桌面中控底座** | ❌ 生产级系统：无冗余、无 SLA、无故障演练 |
 | **参考实现**：约定与代码都可照抄 | ❌ 通过任何安全认证或工业标准 |
-| 端侧设备的**适配器集合** | ❌ 通用 MQTT 框架：设备接入**按设备定制**，不做代码层通用路由 |
+| 端侧设备的**插件集合** | ❌ 通用 MQTT 框架：核心不认识任何设备，每台设备一个自包含目录；传输方式按设备资源选 |
 | 让 Agent **下发指令并拿到回执** | ❌ 安全回路：**不能**用来驱动高压、动力机械等有安全风险的执行器 |
 
 🔴 **必须知道的五条：**
@@ -156,13 +164,13 @@ sequenceDiagram
 git clone <本仓地址> /home/pi/cooperate/pihub && cd /home/pi/cooperate/pihub
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env && chmod 600 .env      # 填企微凭据、设备 IP、http_allow
-.venv/bin/python app/init_db.py && mkdir -p logs
+.venv/bin/python core/init_db.py && mkdir -p logs
 
 # 最简：只给本机服务用（不接外部设备）
 sudo cp config/mosquitto-localonly.conf /etc/mosquitto/conf.d/pihub.conf
 sudo systemctl restart mosquitto
 
-sudo cp systemd/*.service /etc/systemd/system/
+sudo cp systemd/*.service devices/*/systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pihub-api pihub-devctl pihub-monitor pihub-wecom-bot
 ./acceptance_s9.sh check
@@ -177,8 +185,9 @@ sudo systemctl enable --now pihub-api pihub-devctl pihub-monitor pihub-wecom-bot
   [DEPLOY.md §5](deploy/DEPLOY.md#5-mosquittobroker)。
 - **从零部署的完整步骤**（证书生成、白名单、P4 适配器）：
   [DEPLOY.md §11 复现步骤](deploy/DEPLOY.md#11-复现步骤从零到跑起来)。
-- **接 ESP32-P4 面板**：[`p4-agent/README.md`](p4-agent/README.md) 与
-  [`docs/P4-PI-AGENT-SPEC.md`](docs/P4-PI-AGENT-SPEC.md)。
+- **接 ESP32-P4 面板**：[`devices/p4/README.md`](devices/p4/README.md)；
+  主题 / 报文 / 超时契约在 P4 仓：
+  [`docs/mqtt-contract.md`](https://github.com/Ly-Systems-Lab/Agent-Ops-P4-Terminal/blob/main/docs/mqtt-contract.md)。
 
 ---
 
@@ -188,20 +197,21 @@ sudo systemctl enable --now pihub-api pihub-devctl pihub-monitor pihub-wecom-bot
 
 | 路径 | 内容 |
 |---|---|
-| [`app/`](app/) | Pi 侧全部 Python 代码（api / devctl / monitor / wecom_bot / p4_bot / car_bot …） |
+| [`core/`](core/) | **核心**：配置 / 库 / MQTT 回调兜底 / 告警产出 —— 不认识任何设备 |
+| [`devices/`](devices/) | **一台设备一个自包含目录**：`smalltv/`（C3，HTTP）、`p4/`（面板，MQTT）、`car/`（小车）；接新设备从 [`devices/_template/`](devices/_template/) 复制 |
 | [`config/`](config/) | Mosquitto 配置与 ACL 样例（**脱敏，无真实凭据**） |
-| [`systemd/`](systemd/) | 6 个 systemd 单元（`p4-agent` 的单元在它自己的目录里） |
-| [`p4-agent/`](p4-agent/) | ESP32-P4 ↔ OpenClaw Agent 桥接适配器（独立服务，最小完整样本） |
-| [`win-agent/`](win-agent/) | **指令源侧**客户端：任何持独立凭据的接入方都能安全反控端侧设备（与 `p4-agent/` 对称） |
+| [`systemd/`](systemd/) | 核心服务的单元；**设备单元在各自的 `devices/<name>/systemd/` 里** |
+| [`win-agent/`](win-agent/) | **指令源侧**客户端：任何持独立凭据的接入方都能安全反控端侧设备（与 `devices/p4/` 对称） |
 | [`ai-agent-wecom/`](ai-agent-wecom/) | 把 AI Agent 接入企业微信的教程（可复现，含实拍） |
-| [`docs/`](docs/) | 接入契约、交接文档、架构 / 安全 / 规约 |
+| [`docs/`](docs/) | 插件契约、架构 / 安全 / 规约 |
 | [`deploy/DEPLOY.md`](deploy/DEPLOY.md) | 部署实况台账：单元、端口、配置键、设备清单 |
-| [`acceptance_s9.sh`](acceptance_s9.sh) | S9 验收脚本（只能在 Pi 上跑） |
+| [`acceptance_s9.sh`](acceptance_s9.sh) | S9 验收脚本（只能在 Pi 上跑）；**设备专属检查在 `devices/<name>/selfcheck.sh`**，核心不认识任何设备 |
 | [`.env.example`](.env.example) | 环境变量样例（**值全空**） |
 
-> ★ **`wecom_bot.py` 身兼两职**：`pihub-wecom-bot` 跑的是它（小电视链路）；
-> `p4_bot.py` / `car_bot.py` 又继承它当基类。看到 `from wecom_bot import WeComBot` 时，
-> 它是**被复用的库**，不是启动服务。
+> ★ **`core/wecom_base.py` 是三个设备机器人共用的基类**（WS 长连接 / 心跳 / 重连退避 /
+> 回执配对 / 推送）；`devices/smalltv/bot.py`、`devices/p4/bot.py`、`devices/car/bot.py`
+> 各自继承它。看到 `from core.wecom_base import WeComBot` 时，它是**被复用的库**，
+> 不是启动服务 —— 正在跑的是各自目录里的 `bot.py`。
 
 ### 📖 继续往下读
 
@@ -211,8 +221,8 @@ sudo systemctl enable --now pihub-api pihub-devctl pihub-monitor pihub-wecom-bot
 | 可靠 / 安全 / 隔离分别怎么落地 | [docs/DATA-PLANE-CHARTER.md](docs/DATA-PLANE-CHARTER.md) |
 | 安全边界、ACL、HTTP 加固路线 | [docs/SECURITY.md](docs/SECURITY.md) |
 | 从零部署、端口、配置键 | [deploy/DEPLOY.md](deploy/DEPLOY.md) |
-| P4 的主题 / 报文 / 超时契约 | [docs/P4-PI-AGENT-SPEC.md](docs/P4-PI-AGENT-SPEC.md) |
-| P4 侧已实现到什么程度 | [docs/P4-PI-HANDOFF.md](docs/P4-PI-HANDOFF.md) |
+| 怎么接一台新设备（插件边界） | [docs/DEVICE-PLUGIN.md](docs/DEVICE-PLUGIN.md) |
+| P4 的主题 / 报文 / 超时契约 | P4 仓 [`docs/mqtt-contract.md`](https://github.com/Ly-Systems-Lab/Agent-Ops-P4-Terminal/blob/main/docs/mqtt-contract.md) |
 | 企微机器人怎么建、怎么接 | [ai-agent-wecom/README.md](ai-agent-wecom/README.md) |
 | 三件套的顶层设计与协同约定 | [Agent-Ops-Architecture](https://github.com/Ly-Systems-Lab/Agent-Ops-Architecture) |
 

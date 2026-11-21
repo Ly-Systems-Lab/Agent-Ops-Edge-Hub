@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """P4 设备机器人（企微智能机器人，长连接 API 模式）。
 
-与 C3 小电视机器人（wecom_bot.py）的关系：
+与 C3 小电视机器人（core/wecom_base.py）的关系：
   - **完全独立进程、独立 bot 账号、独立 MQTT 主题**
-  - 复用 wecom_bot.py 的 WeComBot 类（WS 长连接 / 心跳 / 重连退避 / 被动回复），
-    只覆盖「指令解析 + 主题 + 回显」三处；wecom_bot.py 本身一行不改。
+  - 复用 core/wecom_base.py 的 WeComBot 类（WS 长连接 / 心跳 / 重连退避 / 被动回复），
+    只覆盖「指令解析 + 主题 + 回显」三处；core/wecom_base.py 本身一行不改。
   - 为什么复用而不是复制全文件：心跳线程泄漏、退避不重置、pending 无界增长那些坑
-    已经修过一轮了（见 wecom_bot.py 里的注释），复制一份等于让它们再犯一次。
+    已经修过一轮了（见 core/wecom_base.py 里的注释），复制一份等于让它们再犯一次。
 
 链路：
   企微消息 → p4_command.parse_command → hub/command/p4
@@ -26,16 +26,25 @@ import threading
 import time
 import uuid
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# —— B2：把仓库根放进 sys.path，core.* / devices.* 才 import 得到 ——
+# 往上退到「含 core/ 的那一层」为止，不数层数（数层数正是证书路径踩过的坑）。
+_p = os.path.dirname(os.path.abspath(__file__))
+while not os.path.isdir(os.path.join(_p, "core")):
+    _parent = os.path.dirname(_p)
+    if _parent == _p:
+        raise SystemExit(f"找不到仓库根：{__file__} 之上没有 core/")
+    _p = _parent
+if _p not in sys.path:
+    sys.path.insert(0, _p)
 
 import websocket  # noqa: E402
 import paho.mqtt.client as mqtt  # noqa: E402
 
-from wecom_bot import (  # noqa: E402  复用成熟实现，见文件头说明
+from core.wecom_base import (  # noqa: E402  复用成熟实现，见文件头说明
     WeComBot, WS_URL, _load_env, _log, cfg,
 )
-import mqtt_guard  # noqa: E402
-import p4_command  # noqa: E402
+from core import mqtt_guard  # noqa: E402
+from devices.p4 import command as p4_command  # noqa: E402
 
 # ---------------- P4 专用常量 ----------------
 CMD_TOPIC = "hub/command/p4"

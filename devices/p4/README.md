@@ -5,7 +5,7 @@
 ```
 ESP32-P4 ──mTLS──▶ MQTT hub/chat/p4
                         │
-                  p4_agent.py 订阅
+                  bridge.py 订阅
                         │  HTTP POST  stream:true
                         ▼
             OpenClaw Gateway /v1/chat/completions
@@ -21,22 +21,20 @@ ESP32-P4 ──mTLS──▶ MQTT hub/chat/p4
 
 ## 为什么单独一个目录
 
-`pihub/` 里的 4 个服务是**通用中控**（行情/天气/设备指令/企微推送），跟具体哪台设备无关。
-`p4-agent/` 是**一个具体设备**的适配器：它的配置、证书、systemd 单元都只服务 P4 这一台。
+`core/` 只放**与设备无关**的那部分（行情 / 天气 / 企微基类 / MQTT 守卫 / DB 工具）。
+`devices/smalltv/`、`devices/p4/`、`devices/car/` 各是**一个具体设备**的插件：
+主题、指令解析、回执渲染、凭据、systemd 单元都只服务那一台。
 
 分开的好处：
-- P4 私有证书不进 `pihub/`，泄露面更小
-- 换设备/加设备时，`pihub/` 一行不动
-- P4 适配器出问题不影响中控
+- P4 私有证书不进 `core/`，泄露面更小
+- 换设备 / 加设备时，核心一行不动（[`devices/_template/`](../_template/) 就是给这件事准备的）
+- 一台适配器出问题不影响别的设备与核心
 
-> ⚠️ **这正是当前底座的能力边界**：`pihub/` 是**单设备**结构
-> （`hub/command/smalltv` 硬编码，`smalltv_ip` 单值）。
-> 每接一台新设备，就要像 `p4-agent/` 这样再写一个适配器。
->
-> **但这不是缺陷，是设计选择。** 本项目是「定制端侧接入 + Agent 互联」的结合体，
-> **只有「企微机器人分层管理」那一层是通用的**。
-> 刻意不做多设备路由的理由，以及「怎么接你自己的设备」，见
-> [`docs/ARCHITECTURE.md` §架构边界](../docs/ARCHITECTURE.md#四架构边界这不是通用-mqtt-底座)。
+> **这不是缺陷，是设计选择。** 本项目是「定制端侧接入 + Agent 互联」的结合体，
+> **只有「企微机器人分层管理」那一层是交互级通用的**。
+> 边界怎么划、怎么接你自己的设备，见
+> [`docs/ARCHITECTURE.md` §架构边界](../../docs/ARCHITECTURE.md#四架构边界核心不认识任何设备)
+> 与 [`docs/DEVICE-PLUGIN.md`](../../docs/DEVICE-PLUGIN.md)。
 
 ---
 
@@ -44,35 +42,36 @@ ESP32-P4 ──mTLS──▶ MQTT hub/chat/p4
 
 | 文件 | 说明 |
 |---|---|
-| `app/p4_agent.py` | 主程序（单文件，无本地依赖） |
-| `systemd/p4-agent.service` | systemd 单元 |
+| `bridge.py` | 主程序（单文件，无本地依赖） |
+| `systemd/pihub-p4-bridge.service` | systemd 单元 |
 | `.env.example` | 环境变量样例 |
 | `certs/` | **不在仓内**（`*.key` 已被 `.gitignore` 拦），你要自己生成一套 |
 | `logs/` | 运行时目录，**部署时要 `mkdir -p logs`**（unit 把日志追加到这里） |
 
-> `app/p4_agent.py` 只依赖 `paho-mqtt`，没有本地模块 —— 但**装在哪**很关键：
+> `bridge.py` 只依赖 `paho-mqtt`，没有本地模块 —— 但**装在哪**很关键：
 > unit 用的是本目录的 `.venv`，装在 `pihub/.venv` 里的 paho 它看不见。
 
 ---
 
 ## 部署
 
-> ⚠️ **先看路径**：`systemd/p4-agent.service` 里 4 处路径**默认写死**
-> `/home/pi/cooperate/p4-agent`（与 `pihub` 那套 unit 同一约定）。
+> ⚠️ **先看路径**：`systemd/pihub-p4-bridge.service` 里 5 处路径**默认写死**
+> `/home/pi/cooperate/pihub/devices/p4`（与其余 unit 同一约定）。
 > 放到别处就得把这 4 处一起改，**漏一处服务就起不来**。
 
 ```bash
 # 0) 放到约定目录
 sudo mkdir -p /home/pi/cooperate
-sudo cp -r p4-agent /home/pi/cooperate/
-cd /home/pi/cooperate/p4-agent
+sudo mkdir -p /home/pi/cooperate/pihub/devices
+sudo cp -r devices/p4 /home/pi/cooperate/pihub/devices/
+cd /home/pi/cooperate/pihub/devices/p4
 
 # 1) 依赖：建本适配器**自己的** venv（unit 的 ExecStart 指向它）
 python3 -m venv .venv && .venv/bin/pip install 'paho-mqtt==2.1.0'
 mkdir -p logs          # ★ 必须建！unit 把 stdout/stderr 追加到 logs/agent.log，
                        #   目录不存在时 systemd 打不开目标、服务直接启动失败
 
-# 2) 证书：放到 p4-agent/certs/
+# 2) 证书：放到 devices/p4/certs/
 #    ca.crt / agent.crt / agent.key       ← 本适配器（agent 角色）
 #    另需在 broker 侧装 ca.crt / broker.crt / broker.key
 #    生成方式见 deploy/DEPLOY.md §5
@@ -89,13 +88,13 @@ chmod 600 .env
 #      topic read  hub/device/p4/status
 
 # 5) 装服务
-sudo cp systemd/p4-agent.service /etc/systemd/system/
+sudo cp systemd/pihub-p4-bridge.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now p4-agent
+sudo systemctl enable --now pihub-p4-bridge
 
 # 6) 验证
-systemctl is-active p4-agent
-journalctl -u p4-agent -n 50      # 或 tail -f logs/agent.log
+systemctl is-active pihub-p4-bridge
+journalctl -u pihub-p4-bridge -n 50      # 或 tail -f logs/agent.log
 ```
 
 > **想用系统 python3 而不是 venv？** 把 unit 的 `ExecStart` 改成 `/usr/bin/python3`，
@@ -106,7 +105,7 @@ journalctl -u p4-agent -n 50      # 或 tail -f logs/agent.log
 
 ## 会话上下文（★ 重要）
 
-SPEC §9 说 P4「只有一条对话流」，所以适配器给 Gateway 的会话 ID 是**固定值**：
+`mqtt-contract.md` §8 说 P4「只有一条对话流」，所以适配器给 Gateway 的会话 ID 是**固定值**：
 
 ```python
 conv = f"conv:{DEVICE_ID}-main"        # = conv:p4-main
@@ -127,7 +126,7 @@ Gateway 的 `/v1/chat/completions` 用 `user` 字段做会话识别，
 ## 并发限制：严格串行（`MAX_CONCURRENT = 1`）
 
 上游是 `BoundedSemaphore(1)`。已有指令在跑时，新指令**立即**回
-`agent_busy`（SPEC §5.3 允许的四个错误码之一），**不排队**。
+`agent_busy`（`mqtt-contract.md` §5.3 允许的四个错误码之一），**不排队**。
 
 > ⚠️ **一个被实测推翻的假设**：早期以为「P4 是一次一句，气泡期间不发下一条」。
 > 实际**不是** —— P4 会在上一句还在流式时就发下一句：
@@ -142,15 +141,14 @@ Gateway 的 `/v1/chat/completions` 用 `user` 字段做会话识别，
 > 两个线程并行时，17 帧的小回复会被 543 帧的大回复"压"到最后才显完，
 > **用户看到的就是"排队"**。所以「排队」不是 P4 的设计，是抢同一气泡导致的。
 
-**为什么不排队**：SPEC §5.4 第 3 条明写「你这边也不需要为它保留待投递队列」。
+**为什么不排队**：`mqtt-contract.md` §5.4 第 3 条明写「你这边也不需要为它保留待投递队列」。
 
 > ✅ **被拒后可原样重发**：拒绝发生在 `dedup` 之前，被拒的 `id` 没被标记，
 > 所以用户重发同一句话会正常执行，不会被当成重复忽略。
 
 ## 报文契约
 
-完整契约见 [`docs/P4-PI-AGENT-SPEC.md`](../docs/P4-PI-AGENT-SPEC.md)（§4 主题 / §5 报文），
-实施交接与自验记录见 [`docs/P4-PI-HANDOFF.md`](../docs/P4-PI-HANDOFF.md)。
+完整契约见 P4 仓 [`docs/mqtt-contract.md`](https://github.com/Ly-Systems-Lab/Agent-Ops-P4-Terminal/blob/main/docs/mqtt-contract.md)（§4 主题 / §5 报文）。
 
 **五条硬约束**（违反任何一条，P4 屏幕上都会显示成"看不懂"）：
 
@@ -174,7 +172,7 @@ Gateway 的 `/v1/chat/completions` 用 `user` 字段做会话识别，
 | `P4_MQTT_PORT` | `8883` | TLS 口。**不要**用 1883（那是本机明文口） |
 | `P4_MQTT_USER` | `agent` | ACL 角色名 |
 | `P4_MQTT_PASS` | — | ★ 必填 |
-| `P4_CA_FILE` 等 | `<仓库>/p4-agent/certs/*` | 留空即自动相对本文件解析 |
+| `P4_CA_FILE` 等 | `<仓库>/devices/p4/certs/*` | 留空即自动相对本文件解析 |
 | `P4_GATEWAY_URL` | `http://127.0.0.1:18789/v1/chat/completions` | OpenClaw Gateway |
 | `P4_GATEWAY_MODEL` | `openclaw/main` | 与企微话题**同一套 Agent 能力**（能执行工具、能改文件） |
 | `P4_GATEWAY_TOKEN` | — | ★ 必填 |

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """Pi Hub 指令解析（§7.2 企微指令 → hub/command/smalltv 的 {action,value}）。
 
-被 wecom_bot（解析群消息）与 devctl（执行）共用，保证单一来源。
+被 devices/smalltv/bot.py（解析群消息）与 devctl.py（执行）共用，保证单一来源。
 
 约定（§3）：
   {"action": "set_mode", "value": 3}          # 0时钟 1天气 2相册 3股票

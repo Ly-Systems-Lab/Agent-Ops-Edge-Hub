@@ -1,0 +1,23 @@
+[Unit]
+Description=<name> 设备适配器（MQTT 命令 → 设备动作 → 回执）
+After=network-online.target mosquitto.service
+Wants=network-online.target mosquitto.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+# ⚠️ 本文件有 3 处路径（WorkingDirectory / ExecStart / Standard* 两条算一处），
+#    默认按 <部署目录> = /home/pi/cooperate/pihub。部署到别处要一起改，漏一处就起不来。
+WorkingDirectory=/home/pi/cooperate/pihub
+Environment=PYTHONUNBUFFERED=1
+Environment=PIHUB_DB=/home/pi/cooperate/pihub/data/pihub.db
+ExecStart=/home/pi/cooperate/pihub/.venv/bin/python /home/pi/cooperate/pihub/devices/<name>/bot.py
+Restart=always
+RestartSec=5
+# ★ logs/ 目录必须**先存在**：systemd 不会替你建目录，打不开 append 目标时服务直接启动失败。
+StandardOutput=append:/home/pi/cooperate/pihub/logs/<name>.log
+StandardError=append:/home/pi/cooperate/pihub/logs/<name>.log
+
+[Install]
+WantedBy=multi-user.target

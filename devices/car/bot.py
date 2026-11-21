@@ -4,8 +4,8 @@
 
 与 P4 机器人（p4_bot.py）的关系：
   - 完全独立进程、独立 bot 账号、独立 MQTT 主题
-  - 复用 wecom_bot.py 的 WeComBot（WS 长连接 / 心跳 / 重连退避 / 被动回复），
-    只覆盖「凭据来源 + 指令路由 + 主题 + 回执配对」几处；wecom_bot.py 一行不改。
+  - 复用 core/wecom_base.py 的 WeComBot（WS 长连接 / 心跳 / 重连退避 / 被动回复），
+    只覆盖「凭据来源 + 指令路由 + 主题 + 回执配对」几处；core/wecom_base.py 一行不改。
 
 链路：
   企微消息 → car_command.parse_command → hub/command/car
@@ -26,16 +26,25 @@ import threading
 import time
 import uuid
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# —— B2：把仓库根放进 sys.path，core.* / devices.* 才 import 得到 ——
+# 往上退到「含 core/ 的那一层」为止，不数层数（数层数正是证书路径踩过的坑）。
+_p = os.path.dirname(os.path.abspath(__file__))
+while not os.path.isdir(os.path.join(_p, "core")):
+    _parent = os.path.dirname(_p)
+    if _parent == _p:
+        raise SystemExit(f"找不到仓库根：{__file__} 之上没有 core/")
+    _p = _parent
+if _p not in sys.path:
+    sys.path.insert(0, _p)
 
 import websocket  # noqa: E402
 import paho.mqtt.client as mqtt  # noqa: E402
 
-from wecom_bot import (  # noqa: E402
+from core.wecom_base import (  # noqa: E402
     WeComBot, WS_URL, _load_env, _log, cfg,
 )
-import mqtt_guard  # noqa: E402
-import car_command  # noqa: E402
+from core import mqtt_guard  # noqa: E402
+from devices.car import command as car_command  # noqa: E402
 
 # ---------------- 小车专用常量 ----------------
 CMD_TOPIC = "hub/command/car"

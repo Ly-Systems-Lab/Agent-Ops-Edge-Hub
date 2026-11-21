@@ -1,5 +1,5 @@
 # ============================================================
-# Pi Hub MQTT ACL —— 依据 P4-PI-AGENT-SPEC.md §2
+# Pi Hub MQTT ACL —— 依据 P4 仓 docs/mqtt-contract.md §2
 # 原则：按主题收窄，绝不给无限制通配（"#" 仅限 observer 调试账号）
 #
 # ⚠️ **判断权限别信 SUBACK / PUBACK**：被 ACL 拒绝时 broker 仍回
