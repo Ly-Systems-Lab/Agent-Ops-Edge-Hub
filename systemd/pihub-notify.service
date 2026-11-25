@@ -1,0 +1,25 @@
+[Unit]
+Description=Pi Hub 平台通知器 (hub/alert/# → 企微，派派身份)
+After=network-online.target mosquitto.service openclaw-gateway.service
+Wants=network-online.target mosquitto.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/cooperate/pihub
+EnvironmentFile=/home/pi/cooperate/pihub/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PIHUB_DB=/home/pi/cooperate/pihub/data/pihub.db
+# openclaw CLI 要在 PATH 里
+Environment=PATH=/home/pi/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/pi/cooperate/pihub/.venv/bin/python /home/pi/cooperate/pihub/core/notify.py
+Restart=always
+RestartSec=5
+# ★ 日志只由 notify.py 自己写 logs/notify.log。
+#   这里不要再 append 同一个文件 —— 会与代码里的文件句柄重复写，每条日志出现两遍。
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

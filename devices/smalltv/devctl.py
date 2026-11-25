@@ -12,7 +12,7 @@ Flask 再转发 ESP32 /set。执行结果 publish 到 hub/command/smalltv/ack，
     → [本进程] 订阅 → 调 /api/control/mode|brightness → ESP32 /set
     → publish hub/command/smalltv/ack → Bot 回群
 
-运行：cd /home/pi/cooperate/pihub && .venv/bin/python app/devctl.py
+运行：cd /home/pi/cooperate/pihub && .venv/bin/python devices/smalltv/devctl.py
 说明：为什么不让 Bot 直调 API？—— 保持"控制指令即总线消息"的中控语义，
       未来接入更多设备（机械臂/传感器）时，各执行器独立订阅各自 topic 即可。
 """

@@ -1,0 +1,38 @@
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+
+# 秘密：一个都不能进镜像
+.env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+**/*.crt
+**/*.csr
+password_file
+
+# 运行时数据
+data/
+logs/
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+backup/
+
+# 不需要进镜像的源码（COPY core/ 不会碰，但缩上下文）
+devices/
+win-agent/
+ai-agent-wecom/
+app/
+p4-agent/
+notes/
+docs/
+systemd/
+config/
+deploy/
+
+# VCS / 编辑器
+.git/
+.vscode/
+.idea/

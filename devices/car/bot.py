@@ -17,7 +17,7 @@
   不再等动作跑完（不像 P4 那样 5 秒超时）。动作结束后车侧会补发一条 done 回执，
   那条走「无 pending → 主动推默认会话」路径，相当于异步结果通知。
 
-运行：/home/pi/cooperate/pihub/.venv/bin/python app/car_bot.py
+运行：/home/pi/cooperate/pihub/.venv/bin/python devices/car/bot.py
 """
 import json
 import os

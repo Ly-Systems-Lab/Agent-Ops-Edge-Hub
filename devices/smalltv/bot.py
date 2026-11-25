@@ -5,7 +5,11 @@
 本文件 = 通用基类（core/wecom_base.py）的**小电视实现**：
 
   - 指令：企微消息 → hub/command/smalltv → devctl 执行 → ack 回群
-  - 告警：订阅 hub/alert/# → 渲染成 markdown → 推到会话
+
+★ 2026-11-25：**本插件不再处理告警**。
+  `hub/alert/#` 是平台级主题，已交给 core/notify.py（pihub-notify，派派身份）消费。
+  告警渲染函数 format_alert 也已整体搬去 core/notify.py（它本来就跟小电视无关）。
+  本文件只剩设备职责：指令下行 + 回执上行。
 
 基类提供 WS 长连接 / 心跳 / 重连退避 / 回执配对 / chatid 持久化；
 本文件只放小电视自己的东西：主题、指令表接线、回执与告警的渲染、日志落点。
@@ -52,6 +56,8 @@ CMD_ACK_TOPIC = "hub/command/smalltv/ack"
 
 # ---------------- 消息格式化 ----------------
 STOCK_TYPES = ("limit_up", "limit_down", "surge")
+# 定时快照（现价 / 天气）：payload = {"key", "markdown"}，正文已渲染好
+SNAPSHOT_TYPES = ("oil_price", "hangzhou_weather")
 
 
 def _fmt_missing(v, suffix=""):
@@ -116,6 +122,16 @@ def format_alert(topic, payload):
             lines.append(f"> 触发阈值：±{th_s}%")
         lines.append(f"> {datetime.now().strftime('%H:%M:%S')}")
         return "\n".join(lines)
+
+    # 定时快照（2026-11-25）：monitor 里已经渲染好的 markdown 正文，原样发出。
+    # ★ 为什么单独一条分支：快照的 payload 只有 {key, markdown}，没有 symbol/price/pct，
+    #   走下面的通用兑底会把 markdown 当成普通字段列出来，变成一堆 JSON 碎片。
+    if atype in SNAPSHOT_TYPES:
+        body = payload.get("markdown")
+        if body:
+            return str(body)
+        _log(f"[snapshot] {topic} 缺 markdown 字段，降级为通用兑底")
+
 
     # 通用兜底：未知告警类型，不猜语义，原样陈述，绝不拼 None
     lines = [f"**{title}**", f"> 类型：{atype}"]
@@ -189,9 +205,14 @@ def start_mqtt(bot, log_path):
     port = int(float(cfg("mqtt_port") or 1883))
 
     def on_connect(client, userdata, flags, rc, props=None):
-        client.subscribe("hub/alert/#", qos=1)
+        # ★ 2026-11-25：不再订阅 hub/alert/#。
+        #   hub/alert/* 是**平台级**主题（名字里没有任何设备痕迹），
+        #   由 core/notify.py（pihub-notify，派派身份）消费。
+        #   本插件退回纯设备角色：只收自己设备的指令回执。
+        #   旧写法让「C3 在线」变成涨跌停告警的强制依赖 —— 停掉这个小电视，
+        #   告警就整个失效，而用户根本不需要它在线。
         client.subscribe(CMD_ACK_TOPIC, qos=1)
-        _log(f"[mqtt] connected {host}:{port}, subscribed hub/alert/# + {CMD_ACK_TOPIC}")
+        _log(f"[mqtt] connected {host}:{port}, subscribed {CMD_ACK_TOPIC}")
 
     def on_message(client, userdata, msg):
         topic = msg.topic
@@ -207,9 +228,8 @@ def start_mqtt(bot, log_path):
         if topic == CMD_ACK_TOPIC:
             bot.on_command_ack(payload)
             return
-        content = format_alert(topic, payload)
-        _log(f"[mqtt] {topic} -> 推送")
-        bot.send_markdown(content)
+        # 别的主题一律忽略（本插件只订 CMD_ACK_TOPIC）
+        _log(f"[mqtt] 忽略非本设备主题 {topic}")
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="pihub-wecom-bot")
     client.on_connect = on_connect

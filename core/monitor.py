@@ -16,7 +16,7 @@
   hub/alert/stock/limit_down  {"symbol","label","price","pct"}
   hub/alert/stock/surge       {"symbol","label","price","pct","threshold"}
 
-运行：cd /home/pi/cooperate/pihub && .venv/bin/python app/monitor.py
+运行：cd /home/pi/cooperate/pihub && .venv/bin/python core/monitor.py
 自测：加 --once 跑一轮就退出；加 --force 忽略交易时段（便于验收）。
 """
 import argparse
@@ -40,12 +40,18 @@ if _p not in sys.path:
 import paho.mqtt.client as mqtt
 from core.config import get as cfg
 from core import datasource as ds
+from core import snapshot as snap
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(BASE)
 DB_PATH = os.environ.get("PIHUB_DB", os.path.join(PROJECT, "data", "pihub.db"))
 
 TOPIC = "hub/alert/stock/{t}"
+# 定时快照（现价 / 天气）走独立的 alert 类型，smalltv bot 走通用兑底模板
+SNAPSHOT_TOPIC = "hub/alert/snapshot/{t}"
+
+# 快照发布用的客户端（由 run() 注入，与股票告警共用同一条连接）
+_snap_client = None
 
 # MQTT 初始连接失败后的重试间隔（秒）。初始 connect 失败不会自愈，需自己重试；
 # 连上之后的掉线由 paho 负责。
@@ -298,6 +304,28 @@ def check_symbol(client, sym, cooldown_sec, surge_threshold, log):
     return True
 
 
+def publish_snapshot(key, content):
+    """定时快照走独立主题。返回 True = 已受理（可记已发）。
+
+    **为什么不复用 publish()**：那个函数是「股票告警」专用，payload 固定
+    symbol/label/price/pct。快照是**已渲染好的 markdown 正文**，
+    payload 就一个 `markdown` 字段，smalltv bot 的通用兜底分支会原样引用。
+    """
+
+    global _snap_client
+    cl = _snap_client
+    if cl is None or not cl.is_connected():
+        return False
+    payload = {"key": key, "markdown": content}
+    info = cl.publish(SNAPSHOT_TOPIC.format(t=key),
+                      json.dumps(payload, ensure_ascii=False), qos=1)
+    if info.rc != mqtt.MQTT_ERR_SUCCESS:
+        print(f"[snapshot] 未受理 rc={info.rc}，不记已发", flush=True)
+        return False
+    print(f"[snapshot] 已受理 mid={info.mid} {SNAPSHOT_TOPIC.format(t=key)}", flush=True)
+    return True
+
+
 def run(once=False, force=False):
     log_path = os.path.join(PROJECT, "logs", "monitor.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -328,6 +356,9 @@ def run(once=False, force=False):
     try:
         client = make_client()
         log(f"[start] MQTT 已连接 {cfg('mqtt_host')}:{cfg('mqtt_port')}")
+        global _snap_client
+        _snap_client = client
+        snap.bind_publish(publish_snapshot)
     except Exception as e:
         log(f"[start] MQTT 连接失败: {e}（将在主循环按 {MQTT_RETRY_SEC}s 退避重试）")
 
@@ -348,6 +379,12 @@ def run(once=False, force=False):
                     except Exception as e:
                         mqtt_retry_at = _now_ts + MQTT_RETRY_SEC
                         log(f"[mqtt] 重连失败: {e}（{MQTT_RETRY_SEC}s 后再试）")
+            # 定时快照（现价 / 天气）：与本轮是否交易时段无关，每轮都看一眼计划表
+            try:
+                snap.run_snapshots(DB_PATH, log)
+            except Exception as e:
+                log(f"[snapshot] 调度异常: {e}")
+
             trading = force or is_trading_time()
             if trading:
                 ok_any = False

@@ -1,0 +1,53 @@
+# Docker Compose · 底座（base only）
+# ------------------------------------------------------------
+# 起什么：
+#   mosquitto —— 总线（安全锚点：ACL / passwd / mTLS 证书）
+#   monitor   —— 行情轮询 + 告警产出 → hub/alert/#
+#
+# 不起什么：api(5000) / devctl / 任何企微 bot / P4 / 小车插件
+#   —— 它们是 devices/ 下的插件与入口，读者自选复刻（见 docs/DEVICE-PLUGIN.md）。
+#
+# ⚠️ 网络：
+#   monitor 只连 127.0.0.1:1883（core/config.py 默认），所以必须 host 网络。
+#   若宿主机已有系统级 mosquitto（本机就是），把下面 mosquitto 服务与 depends_on 删掉即可。
+#
+# 🔴 与宿主 systemd 版 pihub-monitor 不能同时跑（双报）。
+#    启用前：sudo -n systemctl stop pihub-monitor && sudo -n systemctl disable pihub-monitor
+# ------------------------------------------------------------
+# 用法：
+#   cd /home/pi/cooperate/Agent-Ops-Edge-Hub
+#   docker compose -f docker/docker-compose.yml build
+#   docker compose -f docker/docker-compose.yml up -d monitor
+#   docker compose -f docker/docker-compose.yml logs -f monitor
+# ------------------------------------------------------------
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: pihub-mosquitto
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./mosquitto:/mosquitto/config:ro   # 你的 mosquitto.conf / aclfile / passwd
+      - ./mosquitto-data:/mosquitto/data
+    profiles: ["full"]                     # 默认不启；本机 mosquitto 留宿主
+
+  monitor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: agent-ops-edge-hub-base:latest
+    container_name: pihub-monitor
+    restart: unless-stopped
+    network_mode: host
+    user: "0:0"   # 容器需写宿主 data/（属主 pi），pi 用户的 uid 在容器里不存在
+    # 直接跑 monitor（覆盖镜像默认的 --help；要自检就先 run 一次 --once）
+    entrypoint: ["./entrypoint.sh"]
+    command: []
+    environment:
+      TZ: Asia/Shanghai
+      # PIHUB_DB 默认 /opt/pihub/data/pihub.db；下面是显式写法，便于读者一眼看到
+      PIHUB_DB: /opt/pihub/data/pihub.db
+    volumes:
+      - ${PIHUB_DATA:-../data}:/opt/pihub/data:Z
+      - ${PIHUB_LOGS:-../logs}:/opt/pihub/logs:Z
+      - ${PIHUB_ENV:-../.env}:/opt/pihub/.env:ro

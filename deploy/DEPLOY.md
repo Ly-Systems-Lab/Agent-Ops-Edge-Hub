@@ -396,6 +396,27 @@ P4_GATEWAY_TOKEN=***
 
 > 设备 MAC / 局域网 IP 一律 `<REDACTED>`；只保留"有几台、什么类型、走什么协议"。
 
+### 9.0 ⚠ 已退役：`car_gateway.py`（存在但不要部署）
+
+实机 `devices/car/car_gateway.py` 曾是「8883 → 1883 转发」网关，理由是
+「回环订阅者收不到 8883 客户端发布的消息」。**2026-11-23 实测推翻该前提**：
+
+```
+8883 发 hub/command/car/ack      → 1883 订阅者收到 ✅
+1883 发 hub/command/car          → 8883 订阅者收到 ✅
+```
+
+两个 listener 的消息**双向互通**（同一 broker 内部路由）；`per_listener_settings true`
+只决定「认证 / ACL 每 listener 各写一遍」，**不隔离消息投递**。
+
+⇒ 该网关**不是必需组件**。本仓不收录它，`config/aclfile.example` 也不含 `cargw` 角色。
+小车回执走的是原生路径：车（8883, 账号 `car`）写 `hub/command/car/ack` →
+本机 `pihub-car-bot`（1883, 账号 `pihub`）订阅收到，**无需任何桥接**。
+
+> 🩸 这个网关的诞生踩了「ACL 静默丢弃」坑：当时用 `car` 账号往无写权限的主题发布，
+> broker 静默丢弃（PUBACK RC:0 / 退出码 0 / 日志不记 denied），被误读成「listener 隔离」。
+> 判据只能是「订阅端实际收到的字节」。
+
 ### 9.1 ★ 架构定位：核心不认识任何设备，一切皆插件
 
 **结论先说**：架构主张只有一条 —— **一切皆插件**。核心不认识任何设备，
